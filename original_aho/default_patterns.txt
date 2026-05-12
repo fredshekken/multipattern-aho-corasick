@@ -1,0 +1,31 @@
+# Categorized phishing ruleset
+# One pattern per line within each category
+
+[category: brand_terms]
+gcash
+paypal
+amazon
+bank
+
+[category: action_terms]
+verify
+click here
+urgent action
+account suspended
+confirm identity
+update payment
+
+[category: financial_terms]
+bitcoin
+wallet
+password
+otp
+balance
+
+[category: social_engineering_terms]
+covid
+relief
+lottery
+winner
+congratulations
+claim prize
