@@ -114,6 +114,22 @@ st.markdown("""
 # ═══════════════════════════════════════════════════════════════════════
 
 PATTERN_FILE = Path(__file__).with_name("default_patterns.txt")
+DATASETS_DIR = Path(__file__).parent.parent / "datasets"
+
+
+def discover_datasets():
+    """Find all CSV files in the datasets folder."""
+    if DATASETS_DIR.exists():
+        return sorted([f.name for f in DATASETS_DIR.glob("*.csv")])
+    return []
+
+
+def load_dataset(filename):
+    """Load a CSV dataset from the datasets folder."""
+    dataset_path = DATASETS_DIR / filename
+    if dataset_path.exists():
+        return pd.read_csv(dataset_path)
+    return None
 
 
 def load_default_patterns():
@@ -142,6 +158,12 @@ if 'detection_details' not in st.session_state:
 
 if 'validation_results' not in st.session_state:
     st.session_state.validation_results = None
+
+if 'batch_df' not in st.session_state:
+    st.session_state.batch_df = None
+
+if 'batch_dataset_name' not in st.session_state:
+    st.session_state.batch_dataset_name = None
 
 # ═══════════════════════════════════════════════════════════════════════
 #  HELPER FUNCTIONS (Defined Before Use)
@@ -626,6 +648,28 @@ with tab1:
 with tab2:
     st.header("Batch CSV Processing")
     
+    # ─────────────────────────────────────────────────────────────────
+    #  QUICK-SELECT SAMPLE DATASETS
+    # ─────────────────────────────────────────────────────────────────
+    
+    st.subheader("📂 Quick-Load Datasets")
+    available_datasets = discover_datasets()
+    
+    if available_datasets:
+        col_ds1, col_ds2, col_ds3 = st.columns(len(available_datasets) + 1 if len(available_datasets) < 3 else 3)
+        cols = [col_ds1, col_ds2, col_ds3]
+        
+        for idx, dataset_name in enumerate(available_datasets[:3]):
+            with cols[idx]:
+                if st.button(f"📊 {dataset_name.replace('.csv', '')}", use_container_width=True):
+                    df = load_dataset(dataset_name)
+                    if df is not None:
+                        st.session_state.batch_df = df
+                        st.session_state.batch_dataset_name = dataset_name
+                        st.success(f"✅ Loaded {dataset_name} ({len(df)} rows)")
+        
+        st.divider()
+    
     col1, col2 = st.columns(2)
     
     with col1:
@@ -648,9 +692,18 @@ with tab2:
         }
         st.dataframe(pd.DataFrame(sample_data), use_container_width=True)
     
+    # Use uploaded file or session dataset
     if uploaded_file is not None:
+        df = pd.read_csv(uploaded_file)
+        st.session_state.batch_df = df
+        st.session_state.batch_dataset_name = uploaded_file.name
+    elif 'batch_df' in st.session_state:
+        df = st.session_state.batch_df
+    else:
+        df = None
+    
+    if df is not None:
         try:
-            df = pd.read_csv(uploaded_file)
             st.success(f"✅ Loaded {len(df)} rows")
             
             # Detect column name
