@@ -69,13 +69,27 @@ The app will open at `http://localhost:8501`.
 
 Edit the pattern dictionary in the sidebar:
 - Use `[category: name]` headers to organize patterns
+
+**Streamlit Web UI:** Streamlit, Pandas, Matplotlib, NetworkX, Graphviz
 - One pattern per line under each category
 - Click "🔄 Update Patterns" to reload
 
 ## Dataset Integration
 
 To use the Kaggle Email Phishing Dataset:
+For programmatic use of the algorithm:
+```bash
+python -m venv .venv
+source .venv/bin/activate
+# Done! No pip install needed for EnhancedAhoCorasick (stdlib only)
+```
 
+For the Streamlit web UI:
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt  # Streamlit + visualization dependencies
+```
 1. Download from [https://www.kaggle.com/datasets/ethancratchley/email-phishing-dataset](https://www.kaggle.com/datasets/ethancratchley/email-phishing-dataset)
 2. Extract `email_phishing_data.csv`
 3. Upload via the Batch Processing tab or place in a `datasets/` folder

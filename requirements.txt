@@ -1,0 +1,10 @@
+# Streamlit Web UI Dependencies
+# Required only if running: streamlit run enhanced_aho/streamlit_app.py
+# For programmatic use of EnhancedAhoCorasick, see requirements-core.txt
+
+streamlit>=1.28.0
+pandas>=1.5.0
+matplotlib>=3.7.0
+networkx>=3.0
+graphviz>=0.21
+numpy>=1.23.0

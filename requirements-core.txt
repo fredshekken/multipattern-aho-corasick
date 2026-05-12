@@ -1,0 +1,6 @@
+# Core Algorithm Dependencies
+# The EnhancedAhoCorasick algorithm requires ONLY Python stdlib.
+# This file documents the bare minimum for programmatic use.
+
+# No external packages required.
+# Uses only Python standard library: re, collections, pathlib

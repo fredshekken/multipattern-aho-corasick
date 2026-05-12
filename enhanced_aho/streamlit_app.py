@@ -706,11 +706,14 @@ with tab2:
         try:
             st.success(f"✅ Loaded {len(df)} rows")
             
-            # Detect column name
-            text_columns = [col for col in df.columns if 'message' in col.lower() or 'text' in col.lower()]
+            # Detect column name — prioritize 'message', 'text', 'body', 'subject', 'text_combined'
+            text_columns = [
+                col for col in df.columns 
+                if any(keyword in col.lower() for keyword in ['message', 'text', 'body', 'text_combined', 'subject'])
+            ]
             
             if not text_columns:
-                st.error("CSV must contain a 'message' or 'text' column")
+                st.error("CSV must contain a text column (message, text, body, subject, text_combined, etc.)")
             else:
                 text_col = text_columns[0]
                 
