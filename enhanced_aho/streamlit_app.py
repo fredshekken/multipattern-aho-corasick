@@ -656,17 +656,18 @@ with tab2:
     available_datasets = discover_datasets()
     
     if available_datasets:
-        col_ds1, col_ds2, col_ds3 = st.columns(len(available_datasets) + 1 if len(available_datasets) < 3 else 3)
-        cols = [col_ds1, col_ds2, col_ds3]
-        
-        for idx, dataset_name in enumerate(available_datasets[:3]):
-            with cols[idx]:
-                if st.button(f"📊 {dataset_name.replace('.csv', '')}", use_container_width=True):
-                    df = load_dataset(dataset_name)
-                    if df is not None:
-                        st.session_state.batch_df = df
-                        st.session_state.batch_dataset_name = dataset_name
-                        st.success(f"✅ Loaded {dataset_name} ({len(df)} rows)")
+        for start_idx in range(0, len(available_datasets), 3):
+            row_datasets = available_datasets[start_idx:start_idx + 3]
+            cols = st.columns(len(row_datasets))
+
+            for col, dataset_name in zip(cols, row_datasets):
+                with col:
+                    if st.button(f"📊 {dataset_name.replace('.csv', '')}", use_container_width=True):
+                        df = load_dataset(dataset_name)
+                        if df is not None:
+                            st.session_state.batch_df = df
+                            st.session_state.batch_dataset_name = dataset_name
+                            st.success(f"✅ Loaded {dataset_name} ({len(df)} rows)")
         
         st.divider()
     
