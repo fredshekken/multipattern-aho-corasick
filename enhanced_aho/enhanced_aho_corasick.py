@@ -28,15 +28,23 @@ class EnhancedAhoCorasick:
         }
 
         # O3: Filipino derivational affixes for stripping
-        # Ordered longest-first to prevent partial prefix matches
+        # Ordered TRUE longest-first (sorted by character length descending) to
+        # prevent a shorter affix from shadowing a longer one that shares the same
+        # ending/start, e.g. checking 'in' before 'i' (word "inalis" must try the
+        # 2-char "in-" prefix before the 1-char "i-" prefix), and checking 'han'/
+        # 'hin' before 'an'/'in' (a word ending in "...han" must not be caught by
+        # the shorter "-an" suffix first, which would leave a stray "h" on the root).
         # Basis: Schachter & Otanes (1972), Tagalog Reference Grammar
-        self.prefixes = [
-            'magpa', 'nakaka', 'pinaka', 'nag', 'mag', 'pag',
-            'na', 'ma', 'pa', 'i', 'ka', 'in'
-        ]
-        # Suffixes: hyphenated forms first (safe), then bare forms with min-length guard
-        # Bare suffixes only strip if root is still >= 4 chars to avoid false roots
-        self.suffixes = ['-in', '-an', '-han', '-hin', '-ng', 'hin', 'han']
+        self.prefixes = sorted(
+            ['magpa', 'nakaka', 'pinaka', 'nag', 'mag', 'pag',
+             'na', 'ma', 'pa', 'i', 'ka', 'in'],
+            key=len, reverse=True
+        )
+        # Suffixes: 'clean_suffix = suffix.lstrip("-")' below means a hyphenated
+        # entry and its bare counterpart (e.g. '-hin' and 'hin') collapse to the
+        # identical string, so only the unique set is kept, sorted longest-first
+        # for the same shadowing reason as above.
+        self.suffixes = sorted(['-in', '-an', '-han', '-hin'], key=len, reverse=True)
 
         self.goto = [{}]
         self.fail = [0]
@@ -571,7 +579,7 @@ class EnhancedAhoCorasick:
     def _analyze_url(self, text, index):
         """
         O4: Segment-bound risk evaluation.
-
+fili
         Detects if the match at `index` falls inside a URL, segments
         the URL using delimiter-driven parsing, then returns a risk
         multiplier based on which structural segment contains the
