@@ -17,6 +17,7 @@ what is realistically achievable with the officially documented API.
 
 import os
 import logging
+from collections import defaultdict
 from pathlib import Path
 
 import _bootstrap  # noqa: F401 — sets up sys.path for enhanced_aho/ and original_aho/
@@ -40,9 +41,32 @@ PATTERN_FILE = os.environ.get(
 )
 ANOMALY_THRESHOLD = float(os.environ.get("ANOMALY_THRESHOLD", "0.45"))
 
+# ── Simulation mode ────────────────────────────────────────────────────
+# Real Viber bot creation now requires a paid commercial application (since
+# Feb 2024) that is outside this project's control/timeline. When no real
+# VIBER_AUTH_TOKEN is configured, the server automatically runs in
+# simulation mode: instead of calling the real Viber REST API, outgoing
+# messages are queued in memory per-user and pulled by demo_chat.html
+# (a small local page that mimics the Viber UI). All detection, tiering,
+# and escalation logic is 100% identical either way — only the transport
+# for delivering the reply differs. Setting VIBER_AUTH_TOKEN later (once a
+# real bot account exists, on Viber or another platform's equivalent) is
+# the only change needed to go live.
+SIMULATION_MODE = not bool(AUTH_TOKEN)
+_sim_outbox = defaultdict(list)
+
 viber = ViberClient(auth_token=AUTH_TOKEN)
 tracker = ConversationTracker()
 log = DetectionLog()
+
+
+def deliver(receiver, text, keyboard=None):
+    """Send a message to the user via the real Viber API, or queue it for
+    the local simulator if no real token is configured."""
+    if SIMULATION_MODE:
+        _sim_outbox[receiver].append({"text": text, "keyboard": keyboard})
+    else:
+        viber.send_text(receiver, text, keyboard=keyboard)
 
 # ── Engine toggle ──────────────────────────────────────────────────────
 # ENGINE_MODE env var sets the startup default ("enhanced" or "baseline").
@@ -141,10 +165,10 @@ def webhook():
         parts = text.strip().split()
         if len(parts) == 2 and parts[1].lower() in _engines:
             current_mode["value"] = parts[1].lower()
-            viber.send_text(sender_id, f"Engine switched to: {current_mode['value'].upper()}")
+            deliver(sender_id, f"Engine switched to: {current_mode['value'].upper()}")
         else:
-            viber.send_text(sender_id, "Usage: /mode baseline  OR  /mode enhanced "
-                                        f"(currently: {current_mode['value'].upper()})")
+            deliver(sender_id, "Usage: /mode baseline  OR  /mode enhanced "
+                                f"(currently: {current_mode['value'].upper()})")
         return jsonify({"status": 0}), 200
 
     engine = get_engine()
@@ -167,11 +191,11 @@ def webhook():
         logger.info("[Tier 1 - flagged, silent] chat=%s text=%r", chat_id, text)
     elif session_tier == 2:
         patterns = _pattern_summary(assessment["detections"])
-        viber.send_text(sender_id, mode_tag + TIER_2_TEMPLATE.format(patterns=patterns))
+        deliver(sender_id, mode_tag + TIER_2_TEMPLATE.format(patterns=patterns))
         logger.info("[Tier 2 - warning sent] chat=%s text=%r", chat_id, text)
     elif session_tier >= 3:
         patterns = _pattern_summary(assessment["detections"])
-        viber.send_text(
+        deliver(
             sender_id,
             mode_tag + TIER_3_TEMPLATE.format(patterns=patterns),
             keyboard=ViberClient.acknowledgment_keyboard(),
@@ -181,10 +205,37 @@ def webhook():
     return jsonify({"status": 0}), 200
 
 
+@app.route("/simulate/outbox/<user_id>", methods=["GET"])
+def simulate_outbox(user_id):
+    """Polled by demo_chat.html to fetch queued bot replies for a user when
+    running in simulation mode (no real VIBER_AUTH_TOKEN configured)."""
+    messages = _sim_outbox.pop(user_id, [])
+    return jsonify({"messages": messages}), 200
+
+
+@app.after_request
+def add_cors_headers(response):
+    # Simulation mode is a local-only demo aid — CORS is opened so
+    # demo_chat.html (opened directly as a file:// page) can call this
+    # server running on localhost. Not used/needed in real Viber operation.
+    if SIMULATION_MODE:
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    return response
+
+
+@app.route("/webhook", methods=["OPTIONS"])
+@app.route("/simulate/outbox/<user_id>", methods=["OPTIONS"])
+def cors_preflight(user_id=None):
+    return jsonify({}), 200
+
+
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({
         "status": "ok",
+        "simulation_mode": SIMULATION_MODE,
         "engine_mode": current_mode["value"],
         "patterns_loaded": len(get_engine().patterns),
     }), 200
@@ -203,9 +254,9 @@ def get_all_flagged():
 
 
 if __name__ == "__main__":
-    if not AUTH_TOKEN:
-        logger.warning(
-            "VIBER_AUTH_TOKEN is not set — outgoing messages (Tier 2/3) will "
-            "fail until it is configured. See README.md."
+    if SIMULATION_MODE:
+        logger.info(
+            "No VIBER_AUTH_TOKEN set — running in SIMULATION MODE. "
+            "Open demo_chat.html in a browser to test locally."
         )
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
