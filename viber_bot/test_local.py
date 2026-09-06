@@ -24,7 +24,7 @@ def send_message(client, chat_id, sender_id, text, sender_name="Tester"):
 def main():
     client = server.app.test_client()
 
-    with patch.object(server.viber, "send_text") as mock_send:
+    with patch.object(server, "SIMULATION_MODE", False), patch.object(server.viber, "send_text") as mock_send:
         print("--- Message 1: clean, everyday message ---")
         send_message(client, "chat1", "user1", "Team meeting moved to 3 PM tomorrow.")
         print("send_text called:", mock_send.called)
@@ -49,7 +49,7 @@ def main():
         print("send_text called (should be False):", mock_send.called)
 
     print("\n--- Multi-message escalation test (chat2) ---")
-    with patch.object(server.viber, "send_text") as mock_send:
+    with patch.object(server, "SIMULATION_MODE", False), patch.object(server.viber, "send_text") as mock_send:
         msgs = [
             "Kailangan mo i-verify ang account mo, may isyu kasi.",
             "Pakiclick na lang po itong link para ma-verify.",
@@ -68,7 +68,7 @@ def main():
 
     print("\n--- Engine toggle test (chat3) ---")
     obfuscated = "URGENT: Ang iyong G-C@sh ay na-bl0cked. Paki-berify agad."
-    with patch.object(server.viber, "send_text") as mock_send:
+    with patch.object(server, "SIMULATION_MODE", False), patch.object(server.viber, "send_text") as mock_send:
         print("Mode:", server.current_mode["value"])
         send_message(client, "chat3", "user3", obfuscated)
         print("  [enhanced] send_text called:", mock_send.called)

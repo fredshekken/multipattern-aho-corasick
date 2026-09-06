@@ -4,6 +4,16 @@ from pathlib import Path
 
 
 class EnhancedAhoCorasick:
+    # Fuzzy matching (Layer 2, Bitap) is only applied to patterns at least
+    # this many characters long. Short patterns (e.g. "otp", "pin") have very
+    # few characters of "signal", so an edit-distance-1 window matches an
+    # enormous number of coincidental substrings in ordinary text — for
+    # example "otp" is 1 substitution away from "ttp", which appears in every
+    # single "https://" URL. Below this length, only exact/affix matching is
+    # used; fuzzy matching would trade detection sensitivity for a large
+    # false-positive cost that isn't worth it for such short strings.
+    MIN_FUZZY_PATTERN_LENGTH = 5
+
     def __init__(self, patterns, max_errors=1, anomaly_threshold=0.45):
         self.max_errors = max_errors  # k for Bitap fuzzy threshold
         self.anomaly_threshold = anomaly_threshold
@@ -671,6 +681,8 @@ fili
 
         # ── Layer 2: Bitap fuzzy search (catches residual obfuscation) ──
         for j, (pattern, norm_pattern) in enumerate(zip(self.patterns, self.norm_patterns)):
+            if len(norm_pattern) < self.MIN_FUZZY_PATTERN_LENGTH:
+                continue  # too short — see MIN_FUZZY_PATTERN_LENGTH docstring
             bitap_matches = self._bitap_search(clean_text, norm_pattern, self.max_errors)
             for (end_idx, error_count) in bitap_matches:
                 if error_count == 0:
