@@ -19,6 +19,14 @@ A rule-based phishing detection system using an enhanced Aho-Corasick automaton 
 - **Algorithm Explorer** — Visualize Trie structure, transition paths, and phishing detection heuristics
 - **Pattern Management** — Edit categorized rule base without redeploying
 
+### Viber Bot Integration
+
+- **Webhook scanning** — Scans text messages sent directly to the bot or to a group where it is a member
+- **Engine toggle** — Switch between enhanced and baseline detection with `/mode enhanced` or `/mode baseline`
+- **Risk tiers** — Logs low-risk detections, sends warnings for moderate risk, and sends an acknowledgment card for high risk
+- **Conversation escalation** — Escalates repeated Tier 2+ messages within the rolling conversation window
+- **Comparison harness** — Evaluates baseline and enhanced engines on the same labeled CSV dataset
+
 ## Software / Libraries
 
 | Software/Library | Version | Function/Purpose |
@@ -47,6 +55,14 @@ The core `EnhancedAhoCorasick` algorithm is dependency-free and runs with Python
 │   ├── ahocorasick.py                # Reference implementation
 │   ├── visualizer.py                 # Demo visualizer
 │   └── test.py                       # Test suite
+├── viber_bot/
+│   ├── server.py                      # Flask webhook and risk-tier responses
+│   ├── _bootstrap.py                  # Adds shared engine directories to sys.path
+│   ├── baseline_aho_corasick.py      # Baseline adapter
+│   ├── compare_engines.py            # Dataset comparison harness
+│   └── test_local.py                 # Mocked webhook smoke test
+├── datasets/                         # Local evaluation datasets
+├── pyrightconfig.json                # Repository-wide Python import paths
 ├── enhanced_algo_pseudocode.md       # Algorithm documentation
 └── README.md                         # This file
 ```
@@ -89,6 +105,69 @@ Edit the pattern dictionary in the sidebar:
 - Use `[category: name]` headers to organize patterns
 - One pattern per line under each category
 - Click "🔄 Update Patterns" to reload
+
+## Viber Bot
+
+The Viber integration is a bot webhook, not a passive monitor of existing
+private conversations. It can scan messages sent directly to the bot or in a
+group where the bot is a member. Its simulated blocking response is a warning
+card that requires acknowledgment; it cannot lock Viber's native chat UI.
+
+### Viber Installation and Configuration
+
+```bash
+cd viber_bot
+pip install -r requirements.txt
+```
+
+Set `VIBER_AUTH_TOKEN` to the bot token, then start the server:
+
+```bash
+# macOS/Linux
+export VIBER_AUTH_TOKEN="your-token-here"
+
+# Windows PowerShell
+$env:VIBER_AUTH_TOKEN = "your-token-here"
+
+python server.py
+```
+
+The server listens on port `5000` by default. Set `PORT` to use another port.
+For local development, expose the server through an HTTPS tunnel such as
+`ngrok`, then register the public webhook URL:
+
+```bash
+python register_webhook.py https://your-public-host.example/webhook
+```
+
+Optional settings are `ENGINE_MODE` (`enhanced` or `baseline`),
+`PATTERN_FILE`, and `ANOMALY_THRESHOLD` (default `0.45`). The bot stores its
+local SQLite detection log in `viber_bot/detections.db`; this generated file
+is excluded from Git.
+
+### Viber Local Validation
+
+Run the mocked webhook test without a Viber account or public URL:
+
+```bash
+python viber_bot/test_local.py
+```
+
+Run the baseline/enhanced comparison using the built-in sample data:
+
+```bash
+python viber_bot/compare_engines.py
+```
+
+For a labeled CSV, provide the text column, label column, and positive label:
+
+```bash
+python viber_bot/compare_engines.py \
+	--csv path/to/dataset.csv \
+	--text-col message \
+	--label-col label \
+	--positive-label phishing
+```
 
 ## Dataset Integration
 
@@ -135,6 +214,11 @@ The app includes a validation suite under the Algorithm Explorer tab:
 - **False Negatives** — Missed phishing samples
 - **True Negatives** — Correctly cleared safe samples
 - **False Positives** — Incorrectly flagged safe samples
+
+The core modules require only Python. The Viber smoke test additionally uses
+the packages in `viber_bot/requirements.txt`, and the Streamlit interface uses
+the root `requirements.txt`. Pyright resolves the shared `enhanced_aho/` and
+`original_aho/` modules through the repository-root `pyrightconfig.json`.
 
 ## Performance
 
