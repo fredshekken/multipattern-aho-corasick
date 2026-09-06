@@ -752,6 +752,26 @@ fili
 
         return results
 
+    def assess_message(self, text):
+        """Return the shared assessment shape used by the Viber integration."""
+        detections = self.enhanced_search(text)
+        max_risk = max((item["risk_score"] for item in detections), default=0.0)
+
+        if not detections:
+            action_tier = 0
+        elif max_risk >= 2.5:
+            action_tier = 3
+        elif max_risk >= 1.5:
+            action_tier = 2
+        else:
+            action_tier = 1
+
+        return {
+            "detections": detections,
+            "action_tier": action_tier,
+            "is_clean": not detections,
+        }
+
 
 if __name__ == "__main__":
     patterns = ["gcash", "blocked", "login"]

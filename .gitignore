@@ -61,3 +61,6 @@ htmlcov/
 # Logs
 *.log
 logs/
+
+# Local Viber bot state
+viber_bot/detections.db
