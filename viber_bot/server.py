@@ -165,7 +165,9 @@ def webhook():
         parts = text.strip().split()
         if len(parts) == 2 and parts[1].lower() in _engines:
             current_mode["value"] = parts[1].lower()
-            deliver(sender_id, f"Engine switched to: {current_mode['value'].upper()}")
+            tracker.reset(chat_id)  # clear session history for a clean A/B comparison
+            deliver(sender_id, f"Engine switched to: {current_mode['value'].upper()} "
+                                f"(conversation history cleared for a clean comparison)")
         else:
             deliver(sender_id, "Usage: /mode baseline  OR  /mode enhanced "
                                 f"(currently: {current_mode['value'].upper()})")

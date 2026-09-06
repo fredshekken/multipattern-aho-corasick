@@ -117,7 +117,33 @@ Verified locally (`test_local.py`): the same obfuscated message
 entirely under `baseline` — reproducing the exact blind spot documented in
 the thesis's own Figure 1.1.
 
+## Fallback: local simulation mode (no real Viber account needed)
 
+Real Viber bot creation now requires a paid commercial application (since
+Feb 2024, €100/month + approval process) — outside this project's timeline
+and control. Until a real account exists (Viber, or another platform
+substituted after adviser approval), the server **auto-detects** this and
+runs in simulation mode:
+
+```bash
+cd viber_bot
+python server.py          # no VIBER_AUTH_TOKEN set -> simulation mode
+```
+Then open `demo_chat.html` directly in a browser (just double-click it —
+no web server needed for the HTML itself). It's a small Viber-styled chat
+UI that POSTs real webhook-shaped JSON to `http://localhost:5000/webhook`
+and polls `/simulate/outbox/<user_id>` for replies — the exact same
+`server.py`, detection engine, tiering, and escalation logic runs either
+way. Only the message-delivery transport differs (in-memory queue instead
+of the real Viber REST call).
+
+Use the "Use Enhanced" / "Use Baseline" buttons in the demo page to
+reproduce the side-by-side comparison live in front of the panel. Once a
+real bot account exists on whichever platform is approved, set
+`VIBER_AUTH_TOKEN` (or the equivalent) and simulation mode turns off
+automatically — no other code changes needed.
+
+## Setup (once a real bot account is approved)
 
 ### 1. Create a Viber bot account
 Go to https://partners.viber.com, create a bot account, and copy its

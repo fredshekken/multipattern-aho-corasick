@@ -78,3 +78,10 @@ class ConversationTracker:
                 window_size=self.window_size, window_seconds=self.window_seconds
             )
         return self._states[chat_id]
+
+    def reset(self, chat_id):
+        """Clear a conversation's rolling history — used when the demo
+        toggle switches engines, so leftover escalation state from one
+        engine's testing doesn't bleed into a side-by-side comparison
+        against the other engine in the same chat_id."""
+        self._states.pop(chat_id, None)
