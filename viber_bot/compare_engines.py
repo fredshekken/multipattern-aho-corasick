@@ -22,8 +22,11 @@ legitimate; use --positive-label to say which value counts as "phishing"
 
 import argparse
 import csv
+import sys
 import time
 from pathlib import Path
+
+csv.field_size_limit(sys.maxsize)  # some email bodies exceed the 131072-byte default
 
 import _bootstrap  # noqa: F401 — sets up sys.path for enhanced_aho/ and original_aho/
 from baseline_aho_corasick import BaselineAhoCorasick
@@ -46,12 +49,14 @@ SAMPLE_DATA = [
 ]
 
 
-def load_csv(path, text_col, label_col, positive_label):
+def load_csv(path, text_col, label_col, positive_label, max_text_chars=None):
     rows = []
     with open(path, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
             text = row.get(text_col, "")
+            if max_text_chars is not None and len(text) > max_text_chars:
+                text = text[:max_text_chars]
             label = str(row.get(label_col, "")).strip().lower()
             is_phishing = label == str(positive_label).strip().lower()
             rows.append((text, is_phishing))
@@ -115,11 +120,18 @@ def main():
     parser.add_argument("--label-col", default="label")
     parser.add_argument("--positive-label", default="phishing")
     parser.add_argument("--pattern-file", default=DEFAULT_PATTERN_FILE)
+    parser.add_argument("--max-text-chars", type=int, default=None,
+                         help="Truncate each message to this many characters before "
+                              "scanning (applied identically to both engines). Useful "
+                              "for datasets with a handful of pathologically long "
+                              "outlier documents that would otherwise dominate runtime.")
     args = parser.parse_args()
 
     if args.csv:
-        dataset = load_csv(args.csv, args.text_col, args.label_col, args.positive_label)
-        print(f"Loaded {len(dataset)} rows from {args.csv}")
+        dataset = load_csv(args.csv, args.text_col, args.label_col, args.positive_label,
+                            max_text_chars=args.max_text_chars)
+        print(f"Loaded {len(dataset)} rows from {args.csv}"
+              + (f" (truncated to {args.max_text_chars} chars/message)" if args.max_text_chars else ""))
     else:
         dataset = SAMPLE_DATA
         print(f"No --csv given — using {len(dataset)}-row built-in sample set "

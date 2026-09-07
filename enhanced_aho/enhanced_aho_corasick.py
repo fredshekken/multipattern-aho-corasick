@@ -4,19 +4,13 @@ from pathlib import Path
 
 
 class EnhancedAhoCorasick:
-    # Fuzzy matching (Layer 2, Bitap) is only applied to patterns at least
-    # this many characters long. Short patterns (e.g. "otp", "pin") have very
-    # few characters of "signal", so an edit-distance-1 window matches an
-    # enormous number of coincidental substrings in ordinary text — for
-    # example "otp" is 1 substitution away from "ttp", which appears in every
-    # single "https://" URL. Below this length, only exact/affix matching is
-    # used; fuzzy matching would trade detection sensitivity for a large
-    # false-positive cost that isn't worth it for such short strings.
-    MIN_FUZZY_PATTERN_LENGTH = 5
-
-    def __init__(self, patterns, max_errors=1, anomaly_threshold=0.45):
+    def __init__(self, patterns, max_errors=1, anomaly_threshold=0.45,
+                 exact_threshold=1.2, fuzzy_threshold=1.2, affix_threshold=1.05):
         self.max_errors = max_errors  # k for Bitap fuzzy threshold
         self.anomaly_threshold = anomaly_threshold
+        self.exact_threshold = exact_threshold
+        self.fuzzy_threshold = fuzzy_threshold
+        self.affix_threshold = affix_threshold
 
         self.pattern_groups = self._normalize_pattern_groups(patterns)
         self.patterns = [
@@ -85,17 +79,16 @@ class EnhancedAhoCorasick:
         ]
 
         self.anomaly_urgency_terms = {
-            "urgent", "asap", "immediately", "now", "today", "tonight",
-            "before", "deadline", "final", "last chance", "act now"
+            "urgent", "asap", "immediately", "deadline",
+            "last chance", "act now", "expire", "expiring"
         }
         self.anomaly_action_terms = {
-            "click", "tap", "verify", "confirm", "login", "sign in",
-            "update", "reset", "open", "follow", "reply"
+            "click", "tap", "verify", "confirm", "login", "sign in", "reset"
         }
         self.anomaly_sensitive_terms = {
-            "password", "pin", "otp", "code", "security code", "account",
-            "wallet", "bank", "payment", "transfer", "send", "claim",
-            "cash", "money", "card", "identity", "credentials", "gift"
+            "password", "pin", "otp", "security code", "wallet",
+            "bank account", "payment details", "transfer funds",
+            "credentials", "credit card", "gift card"
         }
         self.anomaly_benign_terms = {
             "official", "help", "customer", "support", "hotline",
@@ -160,7 +153,8 @@ class EnhancedAhoCorasick:
         return "\n".join(lines).rstrip() + "\n"
 
     @classmethod
-    def from_pattern_file(cls, pattern_file, max_errors=1, anomaly_threshold=0.45):
+    def from_pattern_file(cls, pattern_file, max_errors=1, anomaly_threshold=0.45,
+                           exact_threshold=1.2, fuzzy_threshold=1.2, affix_threshold=1.05):
         """Create a scanner from a categorized pattern file."""
         file_path = Path(pattern_file)
         if file_path.exists():
@@ -169,7 +163,9 @@ class EnhancedAhoCorasick:
         else:
             patterns = {}
 
-        return cls(patterns, max_errors=max_errors, anomaly_threshold=anomaly_threshold)
+        return cls(patterns, max_errors=max_errors, anomaly_threshold=anomaly_threshold,
+                   exact_threshold=exact_threshold, fuzzy_threshold=fuzzy_threshold,
+                   affix_threshold=affix_threshold)
 
     def _normalize_pattern_groups(self, patterns):
         if isinstance(patterns, dict):
@@ -325,6 +321,29 @@ class EnhancedAhoCorasick:
 
         return matches
 
+    @staticmethod
+    def _is_word_bounded(text, start_idx, end_idx):
+        """
+        O1 (fuzzy-match safeguard): confirms a Bitap match span
+        [start_idx, end_idx] (inclusive) is aligned to word boundaries
+        in `text`, not just an arbitrary substring inside a longer token.
+
+        Without this check, short patterns (e.g. "otp", 3 chars) can
+        fuzzy-match a coincidental substring of an unrelated word within
+        Hamming distance k — e.g. "ttp" inside "https" is only 1
+        substitution away from "otp" — producing a false positive that
+        has nothing to do with the actual word "https". Restricting
+        fuzzy matches to token boundaries (as documented for the O1
+        transition-scoring architecture) eliminates this class of error
+        while leaving Layer 1's literal substring matching untouched.
+
+        A boundary is any position at the very start/end of the text, or
+        any adjacent character that is not a word character (`\\w`).
+        """
+        left_ok = start_idx == 0 or not re.match(r'\w', text[start_idx - 1])
+        right_ok = end_idx == len(text) - 1 or not re.match(r'\w', text[end_idx + 1])
+        return left_ok and right_ok
+
     def _proximity_score(self, text, match_index, window=50):
         """
         O2: Inverse distance weighting (IDW) proximity scoring.
@@ -389,14 +408,37 @@ class EnhancedAhoCorasick:
                 root = word[len(prefix):]
                 break  # only strip one prefix layer
 
-        # Try stripping suffixes from the (possibly prefix-stripped) root
+        # Try stripping suffixes from the (possibly prefix-stripped) root.
+        # Unlike prefixes, the paper does not specify longest-suffix-first —
+        # and greedily taking the longest matching suffix can mis-parse a
+        # coincidental overlap (e.g. "gcashin" ends in both "-in" and
+        # "-hin"; blindly preferring "-hin" strips part of the real root
+        # "gcash", leaving "gcas"). Instead, try every suffix that matches
+        # and prefer whichever candidate root the trie actually recognizes;
+        # only fall back to the longest-match heuristic if none do.
+        candidates = []
         for suffix in self.suffixes:
             clean_suffix = suffix.lstrip('-')
             if root.endswith(clean_suffix) and len(root) - len(clean_suffix) >= 4:
-                root = root[:-len(clean_suffix)]
-                break  # only strip one suffix layer
+                candidates.append(root[:-len(clean_suffix)])
+
+        if candidates:
+            for candidate in candidates:
+                if self._trie_recognizes(candidate):
+                    return candidate
+            root = candidates[0]  # fall back: longest suffix stripped first
 
         return root
+
+    def _trie_recognizes(self, word):
+        """Returns True if `word`, once normalized, is a complete path in
+        the trie ending on an output (pattern-match) state."""
+        curr = 0
+        for char in self._normalize(word):
+            curr = self.goto[curr].get(char, 0)
+            if curr == 0 and char not in self.goto[0]:
+                return False
+        return self.out[curr] > 0
 
     def _affix_search(self, text, original_text):
         """
@@ -470,7 +512,7 @@ class EnhancedAhoCorasick:
         if url_like:
             bump(0.18, "URL-like text")
 
-        obfuscated_tokens = re.findall(r'\b[a-z]*[0-9@$][a-z0-9@$]*\b', lowered)
+        obfuscated_tokens = re.findall(r'\b[a-z]+[0-9@$]+[a-z]+\b', lowered)
         if obfuscated_tokens:
             bump(0.12, "obfuscated spelling")
 
@@ -599,7 +641,7 @@ fili
         """
         normalized_text = self._normalize(text)
         url_pattern = r'(?:https?://|www\.)\S+|\b(?:[a-z0-9-]+\.)+[a-z]{2,}(?:/\S*)?'
-        norm_patterns = [self._normalize(p) for p in self.patterns]
+        norm_patterns = self.norm_patterns  # precomputed in __init__, don't rebuild per call
 
         for m in re.finditer(url_pattern, normalized_text, re.IGNORECASE):
             url = m.group()
@@ -645,6 +687,13 @@ fili
         if anomaly_threshold is None:
             anomaly_threshold = self.anomaly_threshold
 
+        # O4 perf: _analyze_url's result is the same for every match in a
+        # given message (it scans the whole text for URLs regardless of
+        # match position), so compute it once per message instead of once
+        # per match — avoids O(matches x text_length) blowup on long,
+        # keyword-dense text.
+        url_risk = self._analyze_url(text, 0)
+
         # ── Layer 1: Aho-Corasick trie search (exact, post-normalization) ──
         curr = 0
         for i, char in enumerate(clean_text):
@@ -658,6 +707,15 @@ fili
                         reported.add(key)
 
                         pattern = self.patterns[j]
+                        start_idx = i - len(pattern) + 1
+
+                        # O1 word-boundary safeguard (same rule as Layer 2):
+                        # reject matches that are a coincidental substring of
+                        # a larger, unrelated word (e.g. "bank" inside
+                        # "bankruptcy") rather than the actual keyword.
+                        if not self._is_word_bounded(clean_text, start_idx, i):
+                            continue
+
                         context_window = text[max(0, i - 20):min(len(text), i + 20)].lower()
 
                         # Base score: exact match should clear the default UI threshold
@@ -667,10 +725,9 @@ fili
                         proximity_delta = self._proximity_score(text, i)
                         score += proximity_delta
 
-                        url_risk = self._analyze_url(text, i)
                         final_risk = (score - fuzzy_penalty) * url_risk
 
-                        if final_risk >= 1.2:
+                        if final_risk >= self.exact_threshold:
                             results.append({
                                 "alert": f"CRITICAL: '{pattern}' detected!",
                                 "risk_score": round(final_risk, 3),
@@ -681,12 +738,18 @@ fili
 
         # ── Layer 2: Bitap fuzzy search (catches residual obfuscation) ──
         for j, (pattern, norm_pattern) in enumerate(zip(self.patterns, self.norm_patterns)):
-            if len(norm_pattern) < self.MIN_FUZZY_PATTERN_LENGTH:
-                continue  # too short — see MIN_FUZZY_PATTERN_LENGTH docstring
             bitap_matches = self._bitap_search(clean_text, norm_pattern, self.max_errors)
             for (end_idx, error_count) in bitap_matches:
                 if error_count == 0:
                     continue  # already caught by trie layer, skip
+
+                # O1 fuzzy-match safeguard: reject matches that don't align
+                # to a word boundary (e.g. "ttp" inside "https" matching
+                # "otp" at Hamming distance 1 — a coincidental mid-word
+                # substring, not an actual obfuscated occurrence of the word).
+                start_idx = end_idx - len(norm_pattern) + 1
+                if not self._is_word_bounded(clean_text, start_idx, end_idx):
+                    continue
 
                 key = (j, end_idx)
                 if key in reported:
@@ -704,12 +767,11 @@ fili
                 proximity_delta = self._proximity_score(text, i)
                 score += proximity_delta
 
-                url_risk = self._analyze_url(text, i)
                 final_risk = (score - fuzzy_penalty) * url_risk
 
                 # Fuzzy matches use slightly lower threshold than exact
-                fuzzy_threshold = 1.2 - (error_count * 0.15)
-                if final_risk >= fuzzy_threshold:
+                current_fuzzy_threshold = self.fuzzy_threshold - (error_count * 0.15)
+                if final_risk >= current_fuzzy_threshold:
                     results.append({
                         "alert": f"CRITICAL: '{pattern}' detected! (fuzzy match, {error_count} error(s))",
                         "risk_score": round(final_risk, 3),
@@ -735,11 +797,10 @@ fili
             proximity_delta = self._proximity_score(text, word_pos)
             score += proximity_delta
 
-            url_risk = self._analyze_url(text, word_pos)
             final_risk = (score - affix_penalty) * url_risk
 
             # Affix matches use same threshold as fuzzy — harder detection
-            if final_risk >= 1.05:
+            if final_risk >= self.affix_threshold:
                 results.append({
                     "alert": f"CRITICAL: '{pattern}' detected! (affix match: '{token}' -> root '{stripped_root}')",
                     "risk_score": round(final_risk, 3),
@@ -783,68 +844,3 @@ fili
             "action_tier": action_tier,
             "is_clean": not detections,
         }
-
-
-if __name__ == "__main__":
-    patterns = ["gcash", "blocked", "login"]
-    scanner = EnhancedAhoCorasick(patterns, max_errors=1)
-
-    # Test 1: Normalization + trie, single booster
-    msg1 = "Urgent: Your G-C@sh account is vlocked! Verify here: http://bit.ly/fake-link"
-    print("=== Test 1: Normalization + Trie ===")
-    for f in scanner.enhanced_search(msg1):
-        print(f"[{f['risk_score']}] [{f['match_type']}] {f['alert']} | Context: ...{f['context']}...")
-
-    # Test 2: Residual substitution obfuscation — Bitap fuzzy layer
-    msg2 = "Urgent: Your gczsh account is blxcked! Verify here: http://bit.ly/fake-link"
-    print("\n=== Test 2: Fuzzy (Bitap) layer ===")
-    for f in scanner.enhanced_search(msg2):
-        print(f"[{f['risk_score']}] [{f['match_type']}] {f['alert']} | Context: ...{f['context']}...")
-
-    # Test 3: Multiple close boosters — IDW should accumulate higher score
-    msg3 = "AGAD! I-verify ang iyong gcash account. Mag-login na ngayon bago ma-block!"
-    print("\n=== Test 3: O2 — Multiple close boosters (high IDW score) ===")
-    for f in scanner.enhanced_search(msg3):
-        print(f"[{f['risk_score']}] [{f['match_type']}] {f['alert']} | Context: ...{f['context']}...")
-
-    # Test 4: Neutralizers present — IDW should reduce score
-    msg4 = "Official GCash customer support hotline. Login to our authorized service portal."
-    print("\n=== Test 4: O2 — Neutralizers present (suppressed score) ===")
-    for f in scanner.enhanced_search(msg4):
-        print(f"[{f['risk_score']}] [{f['match_type']}] {f['alert']} | Context: ...{f['context']}...")
-
-    # Test 5: Prefixed affix forms — O3 should strip and detect
-    msg5 = "Agad mag-login at i-verify ang iyong account. I-gcash na ngayon!"
-    print("\n=== Test 5: O3 — Affix-stripped detection (mag-login, i-gcash) ===")
-    for f in scanner.enhanced_search(msg5):
-        print(f"[{f['risk_score']}] [{f['match_type']}] {f['alert']} | Context: ...{f['context']}...")
-
-    # Test 6: Suffixed affix forms — O3 should strip and detect
-    msg6 = "I-blockan ang account mo pag hindi mo gcashin agad!"
-    print("\n=== Test 6: O3 — Suffix-stripped detection (blockan, gcashin) ===")
-    for f in scanner.enhanced_search(msg6):
-        print(f"[{f['risk_score']}] [{f['match_type']}] {f['alert']} | Context: ...{f['context']}...")
-
-    # Test 7: Brand keyword in SUBDOMAIN = high risk (spoofing)
-    msg7 = "Verify here: https://gcash.verify-now.com/login"
-    print("\n=== Test 7: O4 — Brand in subdomain (HIGH risk) ===")
-    for f in scanner.enhanced_search(msg7):
-        print(f"[{f['risk_score']}] [{f['match_type']}] {f['alert']} | Context: ...{f['context']}...")
-
-    # Test 8: Brand keyword in SLD = low risk (legitimate domain)
-    msg8 = "Visit https://gcash.com/help for assistance."
-    print("\n=== Test 8: O4 — Brand in SLD (LOW risk, legitimate) ===")
-    for f in scanner.enhanced_search(msg8):
-        print(f"[{f['risk_score']}] [{f['match_type']}] {f['alert']} | Context: ...{f['context']}...")
-
-    # Test 9: URL shortener = highest risk
-    msg9 = "Urgent: Click here to verify your gcash: https://bit.ly/xK92p"
-    print("\n=== Test 9: O4 — URL shortener (HIGHEST risk) ===")
-    for f in scanner.enhanced_search(msg9):
-        print(f"[{f['risk_score']}] [{f['match_type']}] {f['alert']} | Context: ...{f['context']}...")
-
-    # Test 10: Brand keyword in PATH = medium risk
-    msg10 = "Urgent: https://verify-now.com/gcash/confirm your account"
-    print("\n=== Test 10: O4 — Brand in path (MEDIUM risk) ===")
-    for f in scanner.enhanced_search(msg10):
-        print(f"[{f['risk_score']}] [{f['match_type']}] {f['alert']} | Context: ...{f['context']}...")
