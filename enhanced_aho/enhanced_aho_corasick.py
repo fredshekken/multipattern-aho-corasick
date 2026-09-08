@@ -29,6 +29,7 @@ class EnhancedAhoCorasick:
         self.phonetic_map = {
             'v': 'b',   # "vlocked" -> "blocked"
             'f': 'p',   # "pake" -> "fake"
+            'j': 'g',   # "jcash" -> "gcash" (j/g substitution, per Section 1.1)
         }
 
         # O3: Filipino derivational affixes for stripping
@@ -825,22 +826,49 @@ fili
 
         return results
 
+    # Severity band cutoffs — a hybrid of empirical evidence and design intent.
+    #
+    # LOW_MODERATE_CUTOFF (1.142) is empirically derived from the score
+    # distribution observed across two independent evaluation datasets (see
+    # derive_severity_thresholds.py) — confirmed identically on both.
+    #
+    # MODERATE_HIGH_CUTOFF and HIGH_CRITICAL_CUTOFF (1.5, 2.5) are a design
+    # judgment layered on top of that empirical floor, not chased further
+    # down the same precision-milestone method. A bare exact-match detection
+    # scores 1.25 with zero additional context — deliberately keeping that at
+    # "Moderate" rather than "High" requires a message to gather additional
+    # corroborating evidence (nearby risk-indicative context via the IDW
+    # proximity delta, or a risky URL placement) before it escalates to a
+    # stronger single-message action. Chasing the empirical method to its
+    # precision-milestone conclusion (~1.22/1.28) compresses Moderate into an
+    # unusably thin band, since 1.25 alone would then already qualify as
+    # "High" — collapsing the intended graduated response (flag -> warn ->
+    # block) into an almost-binary one. Multi-message escalation
+    # (conversation_tracker.py) remains a second, independent path to Tier 3
+    # for messages that don't individually cross this bar.
+    LOW_MODERATE_CUTOFF = 1.142
+    MODERATE_HIGH_CUTOFF = 1.5
+    HIGH_CRITICAL_CUTOFF = 2.5
+
     def assess_message(self, text):
         """Return the shared assessment shape used by the Viber integration."""
         detections = self.enhanced_search(text)
         max_risk = max((item["risk_score"] for item in detections), default=0.0)
 
         if not detections:
-            action_tier = 0
-        elif max_risk >= 2.5:
-            action_tier = 3
-        elif max_risk >= 1.5:
-            action_tier = 2
+            severity, action_tier = "none", 0
+        elif max_risk >= self.HIGH_CRITICAL_CUTOFF:
+            severity, action_tier = "critical", 3
+        elif max_risk >= self.MODERATE_HIGH_CUTOFF:
+            severity, action_tier = "high", 3
+        elif max_risk >= self.LOW_MODERATE_CUTOFF:
+            severity, action_tier = "moderate", 2
         else:
-            action_tier = 1
+            severity, action_tier = "low", 1
 
         return {
             "detections": detections,
+            "severity": severity,
             "action_tier": action_tier,
             "is_clean": not detections,
         }
