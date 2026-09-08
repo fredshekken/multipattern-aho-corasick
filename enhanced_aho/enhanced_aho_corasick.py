@@ -635,8 +635,9 @@ class EnhancedAhoCorasick:
 fili
         Detects if the match at `index` falls inside a URL, segments
         the URL using delimiter-driven parsing, then returns a risk
-        multiplier based on which structural segment contains the
-        detected pattern or where the URL itself appears suspicious.
+        multiplier and segment label based on which structural segment
+        contains the detected pattern or where the URL itself appears
+        suspicious.
 
         Basis: Zhang et al. (2007) CANTINA; Garera et al. (2007).
         """
@@ -653,25 +654,25 @@ fili
                 segments['subdomains'] + [segments['sld'], segments['tld']]
             ).lower()
             if any(s in full_host for s in self.URL_SHORTENERS):
-                return self.SEGMENT_RISK['shortener']
+                return {"multiplier": self.SEGMENT_RISK['shortener'], "segment": "shortener"}
 
             # Check each pattern against each segment
             for norm_p in norm_patterns:
                 # Subdomain: brand keyword in subdomain = spoofing attempt
                 if any(norm_p in self._normalize(sub) for sub in segments['subdomains']):
-                    return self.SEGMENT_RISK['subdomain']
+                    return {"multiplier": self.SEGMENT_RISK['subdomain'], "segment": "subdomain"}
 
                 # Path or query: moderate risk
                 if norm_p in self._normalize(segments['path']):
-                    return self.SEGMENT_RISK['path']
+                    return {"multiplier": self.SEGMENT_RISK['path'], "segment": "path"}
                 if norm_p in self._normalize(segments['query']):
-                    return self.SEGMENT_RISK['query']
+                    return {"multiplier": self.SEGMENT_RISK['query'], "segment": "query"}
 
                 # SLD: likely legitimate (e.g. gcash.com is the real domain)
                 if norm_p in self._normalize(segments['sld']):
-                    return self.SEGMENT_RISK['sld']
+                    return {"multiplier": self.SEGMENT_RISK['sld'], "segment": "sld"}
 
-        return self.SEGMENT_RISK['none']
+        return {"multiplier": self.SEGMENT_RISK['none'], "segment": "none"}
 
     def enhanced_search(self, text, anomaly_threshold=None):
         """
@@ -693,7 +694,8 @@ fili
         # match position), so compute it once per message instead of once
         # per match — avoids O(matches x text_length) blowup on long,
         # keyword-dense text.
-        url_risk = self._analyze_url(text, 0)
+        url_info = self._analyze_url(text, 0)
+        url_risk = url_info["multiplier"]
 
         # ── Layer 1: Aho-Corasick trie search (exact, post-normalization) ──
         curr = 0
@@ -738,8 +740,11 @@ fili
                                 "score_breakdown": {
                                     "match_layer": "exact token (Aho-Corasick)",
                                     "token_score": 1.25,
+                                    "pattern": pattern,
+                                    "matched_text": clean_text[start_idx:i + 1],
                                     "proximity_delta": round(proximity_delta, 3),
                                     "url_multiplier": url_risk,
+                                    "url_segment": url_info["segment"],
                                     "penalty": 0.0,
                                     "final_risk": round(final_risk, 3),
                                 },
@@ -790,8 +795,11 @@ fili
                         "score_breakdown": {
                             "match_layer": "fuzzy token (Bitap)",
                             "token_score": 1.0,
+                            "pattern": pattern,
+                            "matched_text": clean_text[start_idx:end_idx + 1],
                             "proximity_delta": round(proximity_delta, 3),
                             "url_multiplier": url_risk,
+                            "url_segment": url_info["segment"],
                             "penalty": round(fuzzy_penalty, 3),
                             "final_risk": round(final_risk, 3),
                         },
@@ -827,8 +835,12 @@ fili
                     "score_breakdown": {
                         "match_layer": "affix token",
                         "token_score": 1.0,
+                        "pattern": pattern,
+                        "matched_text": token,
+                        "root": stripped_root,
                         "proximity_delta": round(proximity_delta, 3),
                         "url_multiplier": url_risk,
+                        "url_segment": url_info["segment"],
                         "penalty": affix_penalty,
                         "final_risk": round(final_risk, 3),
                     },
@@ -849,8 +861,11 @@ fili
                     "score_breakdown": {
                         "match_layer": "anomaly heuristic",
                         "token_score": 0.0,
+                        "pattern": "ANOMALY_HEURISTIC",
+                        "matched_text": ", ".join(anomaly_signals),
                         "proximity_delta": 0.0,
                         "url_multiplier": 1.0,
+                        "url_segment": "none",
                         "penalty": 0.0,
                         "anomaly_score": anomaly_score,
                         "final_risk": round(0.95 + (anomaly_score * 0.4), 3),

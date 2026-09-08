@@ -99,11 +99,32 @@
   .modal-overlay.open { display: flex; }
   .modal {
     background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
-    width: 640px; max-width: 90vw; max-height: 85vh; overflow-y: auto; padding: 24px;
+    width: 900px; max-width: 92vw; max-height: 85vh; overflow-y: auto; padding: 24px;
   }
   .modal-close { float: right; cursor: pointer; color: var(--muted); font-size: 18px; }
   .metrics-table td.positive { color: var(--green); }
   .metrics-table td.negative { color: var(--tier3); }
+  .metrics-table td, .metrics-table th { font-variant-numeric: tabular-nums; }
+  .metrics-table td:not(:first-child), .metrics-table th:not(:first-child) { font-family: Consolas, monospace; }
+  .score-message-card { border: 1px solid var(--border); border-radius: 8px; padding: 14px; margin-top: 14px; background: var(--panel-alt); }
+  .score-message-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+  .score-message-title { margin: 0; font-size: 14px; color: var(--blue-dark); }
+  .score-message-text { color: var(--muted); font-size: 12px; margin: 4px 0 0; }
+  .score-chips { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+  .score-chip, .layer-chip { display: inline-block; border-radius: 999px; padding: 3px 8px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+  .score-chip.baseline { color: #42617b; background: #e5edf5; }
+  .score-chip.enhanced { color: var(--blue-dark); background: var(--blue-soft); }
+  .score-chip.low { color: #49677f; background: #e5edf5; }
+  .score-chip.moderate { color: #745914; background: #fff1c9; }
+  .score-chip.high, .score-chip.critical { color: #862b24; background: #ffe0dc; }
+  .layer-chip { color: #49677f; background: #e8f0f7; font-family: Consolas, monospace; font-weight: 400; }
+  .pattern-name { display: block; font-weight: 700; color: var(--text); }
+  .matched-token { display: block; color: var(--muted); font: 11px Consolas, monospace; margin-top: 3px; }
+  .score-table { min-width: 760px; }
+  .score-table .positive-score { color: #9a6b00; font-weight: 700; }
+  .score-table .negative-score { color: var(--tier3); font-weight: 700; }
+  .tier-legend { margin-top: 18px; padding: 12px 14px; border-left: 3px solid var(--blue); background: var(--blue-soft); color: var(--muted); font-size: 12px; line-height: 1.6; }
+  .tier-legend strong { color: var(--blue-dark); }
   .status-line { font-size: 11px; color: var(--muted); margin-top: 6px; }
   .history-list { display: grid; gap: 8px; }
   .history-item { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 13px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-alt); }
@@ -205,7 +226,7 @@
 <script>
 const SERVER = "http://localhost:5000";
 let sessionId = "session_" + Math.floor(Math.random() * 100000);
-let liveResults = { baseline: [], enhanced: [] };
+let liveResults = [];
 
 // ---------- Navigation ----------
 document.querySelectorAll(".nav-item").forEach(item => {
@@ -368,12 +389,12 @@ function renderMetrics(data) {
     </table>`;
 }
 
-function liveMetricSummary(results) {
+function liveMetricSummary(results, engineName) {
   const messages = results.length;
-  const detections = results.reduce((total, result) => total + result.detections.length, 0);
-  const flagged = results.filter(result => result.detections.length > 0).length;
-  const critical = results.filter(result => result.session_tier >= 3).length;
-  const averageTier = messages ? results.reduce((total, result) => total + result.session_tier, 0) / messages : 0;
+  const detections = results.reduce((total, record) => total + record[engineName].detections.length, 0);
+  const flagged = results.filter(record => record[engineName].detections.length > 0).length;
+  const critical = results.filter(record => record[engineName].session_tier >= 3).length;
+  const averageTier = messages ? results.reduce((total, record) => total + record[engineName].session_tier, 0) / messages : 0;
   return { messages, detections, flagged, critical, averageTier };
 }
 
@@ -381,35 +402,74 @@ function scoreValue(value) {
   return typeof value === "number" ? value.toFixed(3) : "—";
 }
 
+function signedScore(value) {
+  if (typeof value !== "number") return "—";
+  return `${value >= 0 ? "+" : ""}${value.toFixed(3)}`;
+}
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, char => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[char]));
+}
+
+function tierChip(label, result, extra) {
+  const severity = result.severity && result.severity !== "none" ? result.severity : "low";
+  return `<span class="score-chip ${label === "Baseline" ? "baseline" : severity}">${label}: Tier ${result.session_tier}${extra || ""}</span>`;
+}
+
+function layerLabel(score, detection) {
+  if (detection.match_type === "fuzzy") return `Bitap k=${detection.error_count}`;
+  if (detection.match_type === "affix") return `Affix: ${score.matched_text} -> ${score.root}`;
+  if (detection.match_type === "anomaly") return "Anomaly";
+  return "Exact";
+}
+
 function renderScoreBreakdown(results) {
-  const rows = [];
-  results.forEach((result, messageIndex) => {
-    result.detections.forEach(detection => {
-      const score = detection.score_breakdown;
-      if (!score) return;
-      rows.push(`<tr>
-        <td>M${messageIndex + 1}: ${detection.match_type || "signal"}</td>
-        <td>${score.match_layer}</td>
-        <td>${scoreValue(score.token_score)}</td>
-        <td>${scoreValue(score.proximity_delta)}</td>
-        <td>${scoreValue(score.url_multiplier)}</td>
-        <td>${scoreValue(score.penalty)}</td>
-        <td>${scoreValue(score.final_risk)}</td>
-      </tr>`);
-    });
-  });
-  if (!rows.length) {
+  if (!results.length) {
     return '<p class="status-line">No enhanced scoring components were recorded in this session.</p>';
   }
-  return `<table class="metrics-table score-table">
-    <thead><tr><th>Detection</th><th>Layer</th><th>Token</th><th>Proximity</th><th>URL x</th><th>Penalty</th><th>Final risk</th></tr></thead>
-    <tbody>${rows.join("")}</tbody>
-  </table>`;
+  return results.map((record, messageIndex) => {
+    const enhanced = record.enhanced;
+    const baseline = record.baseline;
+    const maxRisk = Math.max(...enhanced.detections.map(item => item.risk_score), 0);
+    const rows = enhanced.detections.map(detection => {
+      const score = detection.score_breakdown || {};
+      const proximityClass = score.proximity_delta >= 0 ? "positive-score" : "negative-score";
+      const urlLabel = score.url_segment && score.url_segment !== "none"
+        ? `× ${scoreValue(score.url_multiplier)} (${escapeHtml(score.url_segment)})`
+        : `× ${scoreValue(score.url_multiplier)}`;
+      const penalty = typeof score.penalty === "number" && score.penalty > 0
+        ? `-${scoreValue(score.penalty)}` : scoreValue(score.penalty);
+      return `<tr>
+        <td><span class="pattern-name">${escapeHtml(score.pattern || detection.match_type || "Unknown")}</span><span class="matched-token">${escapeHtml(score.matched_text || detection.context || "")}</span><span class="layer-chip">${escapeHtml(layerLabel(score, detection))}</span></td>
+        <td>${scoreValue(score.token_score)}</td>
+        <td class="${proximityClass}">${signedScore(score.proximity_delta)}</td>
+        <td>${urlLabel}</td>
+        <td>${penalty}</td>
+        <td>${scoreValue(score.final_risk ?? detection.risk_score)}</td>
+      </tr>`;
+    }).join("");
+    const table = rows ? `<table class="metrics-table score-table">
+      <thead><tr><th>Pattern / Token</th><th>Token Score</th><th>Proximity Delta</th><th>URL Mult.</th><th>Penalty</th><th>Calculated Risk</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>` : '<p class="status-line">No enhanced detections for this message.</p>';
+    return `<section class="score-message-card">
+      <div class="score-message-header">
+        <div><h4 class="score-message-title">Message #${messageIndex + 1}</h4><p class="score-message-text">"${escapeHtml(record.text)}"</p></div>
+        <div class="score-chips">
+          ${tierChip("Baseline", baseline, ` · Detections: ${baseline.detections.length}`)}
+          ${tierChip("Enhanced", enhanced, ` · Max Risk: ${scoreValue(maxRisk)} · ${escapeHtml(enhanced.severity || "none")}`)}
+        </div>
+      </div>
+      ${table}
+    </section>`;
+  }).join("");
 }
 
 function renderLiveMetrics() {
-  const baseline = liveMetricSummary(liveResults.baseline);
-  const enhanced = liveMetricSummary(liveResults.enhanced);
+  const baseline = liveMetricSummary(liveResults, "baseline");
+  const enhanced = liveMetricSummary(liveResults, "enhanced");
   document.getElementById("metricsColumnPicker").innerHTML = `
     <div class="card">
       <p class="status-line">Session: ${sessionId} · ${baseline.messages} message${baseline.messages === 1 ? "" : "s"} checked</p>
@@ -419,16 +479,17 @@ function renderLiveMetrics() {
     <table class="metrics-table">
       <thead><tr><th>Live metric</th><th>Original</th><th>Enhanced</th><th>Difference</th></tr></thead>
       <tbody>
-        <tr><td>Messages checked</td><td>${baseline.messages}</td><td>${enhanced.messages}</td><td>—</td></tr>
-        <tr><td>Total detections</td><td>${baseline.detections}</td><td>${enhanced.detections}</td><td>${enhanced.detections - baseline.detections >= 0 ? "+" : ""}${enhanced.detections - baseline.detections}</td></tr>
-        <tr><td>Flagged messages</td><td>${baseline.flagged}</td><td>${enhanced.flagged}</td><td>${enhanced.flagged - baseline.flagged >= 0 ? "+" : ""}${enhanced.flagged - baseline.flagged}</td></tr>
-        <tr><td>Tier 3 / critical</td><td>${baseline.critical}</td><td>${enhanced.critical}</td><td>${enhanced.critical - baseline.critical >= 0 ? "+" : ""}${enhanced.critical - baseline.critical}</td></tr>
+        <tr><td>Messages checked</td><td>${liveResults.length}</td><td>${liveResults.length}</td><td>—</td></tr>
+        <tr><td>Total detections</td><td>${baseline.detections}</td><td>${enhanced.detections}</td><td>—</td></tr>
+        <tr><td>Flagged messages</td><td>${baseline.flagged}</td><td>${enhanced.flagged}</td><td>—</td></tr>
+        <tr><td>Tier 3 / critical</td><td>${baseline.critical}</td><td>${enhanced.critical}</td><td>—</td></tr>
         <tr><td>Average session tier</td><td>${baseline.averageTier.toFixed(2)}</td><td>${enhanced.averageTier.toFixed(2)}</td><td>—</td></tr>
       </tbody>
     </table>
     <h3>Enhanced scoring breakdown</h3>
-    <p class="status-line">Final risk = (token score + proximity delta − penalty) × URL multiplier.</p>
-    ${renderScoreBreakdown(liveResults.enhanced)}`;
+    <p class="status-line">Final risk = (token score + proximity delta − penalty) × URL multiplier, calculated per pattern hit.</p>
+    ${renderScoreBreakdown(liveResults)}
+    <div class="tier-legend"><strong>Severity and action tiers:</strong> <strong>Tier 1 (Low)</strong>: Risk &lt; 1.142, silent system logging. <strong>Tier 2 (Moderate)</strong>: Risk 1.142–1.499, warning notification. <strong>Tier 3 (High / Critical)</strong>: Risk ≥ 1.500 for high warning or ≥ 2.500 for a critical block card; multi-message escalation can also trigger Tier 3 via <code>conversation_tracker.py</code>.</div>`;
   document.getElementById("metricsModal").classList.add("open");
 }
 
@@ -487,7 +548,6 @@ async function sendDualMessage() {
 
   for (const engineName of ["baseline", "enhanced"]) {
     const side = data[engineName];
-    liveResults[engineName].push(side);
     const panelId = "messages-" + engineName;
     if (side.reply_text) {
       const tierClass = side.session_tier >= 3 ? "tier3" : side.session_tier === 2 ? "tier2" : "";
@@ -498,6 +558,7 @@ async function sendDualMessage() {
       addBubble(panelId, "(no detection)", "system");
     }
   }
+  liveResults.push({ text, baseline: data.baseline, enhanced: data.enhanced });
   document.getElementById("dualStatus").textContent = "Both engines checked this message.";
 }
 
@@ -507,7 +568,7 @@ async function newSession() {
   document.getElementById("sessionIdLabel").textContent = sessionId;
   document.getElementById("messages-baseline").innerHTML = "";
   document.getElementById("messages-enhanced").innerHTML = "";
-  liveResults = { baseline: [], enhanced: [] };
+  liveResults = [];
 }
 
 function formatSessionDate(timestamp) {
@@ -557,14 +618,17 @@ async function loadSession(id) {
   document.getElementById("sessionIdLabel").textContent = sessionId;
   document.getElementById("messages-baseline").innerHTML = "";
   document.getElementById("messages-enhanced").innerHTML = "";
-  liveResults = { baseline: [], enhanced: [] };
+  liveResults = [];
   session.messages.forEach(message => {
     addBubble("messages-baseline", message.text, "user");
     addBubble("messages-enhanced", message.text, "user");
     renderStoredResult("messages-baseline", message.results.baseline);
     renderStoredResult("messages-enhanced", message.results.enhanced);
-    liveResults.baseline.push(message.results.baseline);
-    liveResults.enhanced.push(message.results.enhanced);
+    liveResults.push({
+      text: message.text,
+      baseline: message.results.baseline,
+      enhanced: message.results.enhanced,
+    });
   });
   document.querySelector('[data-page="simulation"]').click();
 }
