@@ -478,6 +478,16 @@ def dual_session_detail(session_id):
     return jsonify(session), 200
 
 
+@app.route("/api/dual/sessions/<session_id>", methods=["DELETE"])
+def delete_dual_session(session_id):
+    session = _dual_sessions.pop(session_id, None)
+    for tracker_by_engine in _dual_trackers.values():
+        tracker_by_engine.reset(session_id)
+    if session is None:
+        return jsonify({"error": "Session not found"}), 404
+    return jsonify({"deleted": session_id}), 200
+
+
 @app.route("/api/datasets/upload", methods=["OPTIONS"])
 @app.route("/api/datasets/list", methods=["OPTIONS"])
 @app.route("/api/datasets/<dataset_id>", methods=["OPTIONS"])

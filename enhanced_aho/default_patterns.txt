@@ -1,26 +1,104 @@
 # Categorized phishing ruleset
 # One pattern per line within each category
+# 
+# References & Methodological Basis:
+# 1. Brand Terms: Bangko Sentral ng Pilipinas (BSP) Registered EMIs & Universal Banks; SOP 1 & 4.
+# 2. Action & Security Terms: Warki et al. (2025); Blancaflor et al. (2024); Schachter & Otanes (1972).
+# 3. Financial & Scam Terms: CICC / NPC Public Smishing Bulletins; BwandoWando PH SMS Corpus (2024).
 
 [category: brand_terms]
 gcash
+maya
+paymaya
 paypal
+bdo
+bpi
+unionbank
+landbank
+metrobank
+seabank
+gotyme
+shopee
+lazada
 amazon
+grab
 bank
+viber
+telegram
+whatsapp
 
 [category: action_terms]
 verify
 click here
-urgent action
-account suspended
-confirm identity
+click
+login
+sign in
+register
+link
+update
 update payment
+confirm
+confirm identity
+activate
+reactivate
+restore
+unlock
+claim
+claim prize
+tap
+download
+urgent action
+buksan
+pindutin
+i-click
+i-verify
+mag-login
+kumpirmahin
+paki-verify
+
+[category: security_and_status_terms]
+blocked
+suspended
+account suspended
+deactivated
+restricted
+limited
+locked
+warning
+alert
+urgent
+expired
+hold
+disabled
+panganib
+na-block
+na-suspend
+na-hold
 
 [category: financial_terms]
 bitcoin
 wallet
 password
 otp
+pin
 balance
+bank account
+transfer
+credit card
+fund
+refund
+payout
+cash
+pera
+salapi
+bayad
+pautang
+utang
+loan
+billing
+invoice
+payment
+fee
 
 [category: social_engineering_terms]
 covid
@@ -28,4 +106,21 @@ relief
 lottery
 winner
 congratulations
-claim prize
+prize
+raffle
+jackpot
+ayuda
+libre
+premyo
+panalo
+free load
+bonus
+commission
+reward
+task
+part-time
+hiring
+job offer
+wfh
+sim registration
+sim card

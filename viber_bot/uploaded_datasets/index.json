@@ -1,0 +1,52 @@
+{
+  "a7e7b8f6602a": {
+    "id": "a7e7b8f6602a",
+    "original_filename": "phishing_legit_dataset_KD_10000.csv",
+    "stored_filename": "a7e7b8f6602a_phishing_legit_dataset_KD_10000.csv",
+    "columns": [
+      "text",
+      "label",
+      "phishing_type",
+      "severity",
+      "confidence"
+    ],
+    "row_count": 10000,
+    "uploaded_at": 1788865043.8941615
+  },
+  "ba9557ce5da1": {
+    "id": "ba9557ce5da1",
+    "original_filename": "phishing_email.csv",
+    "stored_filename": "ba9557ce5da1_phishing_email.csv",
+    "columns": [
+      "text_combined",
+      "label"
+    ],
+    "row_count": 82486,
+    "uploaded_at": 1788865307.54376
+  },
+  "2f73bf975b7f": {
+    "id": "2f73bf975b7f",
+    "original_filename": "SPAM_SMS.csv",
+    "stored_filename": "2f73bf975b7f_SPAM_SMS.csv",
+    "columns": [
+      "masked_celphone_number",
+      "hashed_cellphone_number",
+      "date",
+      "text",
+      "carrier"
+    ],
+    "row_count": 1020,
+    "uploaded_at": 1788883300.954881
+  },
+  "c4c1f9189618": {
+    "id": "c4c1f9189618",
+    "original_filename": "philippine_sms_balanced.csv",
+    "stored_filename": "c4c1f9189618_philippine_sms_balanced.csv",
+    "columns": [
+      "text",
+      "label"
+    ],
+    "row_count": 2040,
+    "uploaded_at": 1788884719.0163524
+  }
+}

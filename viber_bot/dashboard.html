@@ -253,7 +253,7 @@ async function refreshDatasetsList() {
       <td>${ds.columns.join(", ")}</td>
       <td>
         <button onclick='openAnalyzeModal(${JSON.stringify(ds).replace(/'/g, "&apos;")})'>Analyze</button>
-        <button class="danger" onclick="deleteDataset('${ds.id}')">Delete</button>
+        <button class="danger" onclick="deleteDataset('${ds.id}', '${String(ds.original_filename).replace(/'/g, "\\'")}')">Delete</button>
       </td>`;
     tbody.appendChild(tr);
   });
@@ -276,8 +276,15 @@ async function uploadDataset() {
   }
 }
 
-async function deleteDataset(id) {
-  await fetch(SERVER + "/api/datasets/" + id, { method: "DELETE" });
+async function deleteDataset(id, filename) {
+  if (!confirm(`Delete uploaded dataset "${filename}"? This cannot be undone.`)) return;
+  const resp = await fetch(SERVER + "/api/datasets/" + encodeURIComponent(id), { method: "DELETE" });
+  if (!resp.ok) {
+    const data = await resp.json().catch(() => ({}));
+    document.getElementById("uploadStatus").textContent = "Error: " + (data.error || "Could not delete dataset");
+    return;
+  }
+  document.getElementById("uploadStatus").textContent = `Deleted: ${filename}`;
   refreshDatasetsList();
 }
 
@@ -591,12 +598,36 @@ async function refreshSessionHistory() {
     const item = document.createElement("div");
     item.className = "history-item";
     item.innerHTML = `<div><strong>${session.session_id}</strong><small>${session.message_count} message${session.message_count === 1 ? "" : "s"} · ${formatSessionDate(session.updated_at)}</small></div>`;
-    const button = document.createElement("button");
-    button.textContent = "Open";
-    button.onclick = () => loadSession(session.session_id);
-    item.appendChild(button);
+    const actions = document.createElement("div");
+    actions.className = "row";
+    const openButton = document.createElement("button");
+    openButton.textContent = "Open";
+    openButton.onclick = () => loadSession(session.session_id);
+    const deleteButton = document.createElement("button");
+    deleteButton.textContent = "Delete";
+    deleteButton.className = "danger";
+    deleteButton.onclick = () => deleteSession(session.session_id);
+    actions.append(openButton, deleteButton);
+    item.appendChild(actions);
     list.appendChild(item);
   });
+}
+
+async function deleteSession(id) {
+  if (!confirm(`Delete conversation session "${id}"? This cannot be undone.`)) return;
+  const resp = await fetch(SERVER + "/api/dual/sessions/" + encodeURIComponent(id), { method: "DELETE" });
+  if (!resp.ok) {
+    document.getElementById("historyStatus").textContent = "Could not delete that session.";
+    return;
+  }
+  if (sessionId === id) {
+    sessionId = "session_" + Math.floor(Math.random() * 100000);
+    document.getElementById("sessionIdLabel").textContent = sessionId;
+    document.getElementById("messages-baseline").innerHTML = "";
+    document.getElementById("messages-enhanced").innerHTML = "";
+    liveResults = [];
+  }
+  refreshSessionHistory();
 }
 
 function renderStoredResult(panelId, result) {
