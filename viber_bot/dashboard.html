@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Phishing Guard — Dashboard</title>
+<style>
+  :root {
+    --bg: #eef4fb;
+    --panel: #ffffff;
+    --panel-alt: #f4f8fd;
+    --border: #d6e1ef;
+    --blue: #1769aa;
+    --blue-dark: #0d4775;
+    --blue-soft: #e2f0fc;
+    --text: #17324d;
+    --muted: #6e8298;
+    --tier2: #f5a623;
+    --tier3: #e6483f;
+    --green: #3fb27f;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+    display: flex; height: 100vh; overflow: hidden;
+  }
+  .sidebar {
+    width: 236px; background: var(--panel); border-right: 1px solid var(--border);
+    padding: 20px 0; flex-shrink: 0;
+  }
+  .sidebar h1 { font-size: 15px; padding: 0 20px 16px; margin: 0; border-bottom: 1px solid var(--border); }
+  .nav-item {
+    padding: 12px 20px; cursor: pointer; color: var(--muted); font-size: 14px;
+    border-left: 3px solid transparent;
+  }
+  .nav-item:hover { color: var(--text); background: var(--panel-alt); }
+  .nav-item.active { color: var(--blue-dark); border-left-color: var(--blue); background: var(--blue-soft); }
+  .nav-icon { display: inline-block; width: 18px; margin-right: 7px; color: var(--blue); font-size: 12px; }
+  .main { flex: 1; overflow-y: auto; padding: 28px 32px; }
+  .page { display: none; }
+  .page.active { display: block; }
+  h2 { margin-top: 0; font-size: 20px; }
+  .subtitle { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 18px; margin-bottom: 18px;
+  }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  input[type=text], input[type=number], select {
+    background: var(--panel-alt); border: 1px solid var(--border); color: var(--text);
+    padding: 8px 10px; border-radius: 6px; font-size: 13px;
+  }
+  button {
+    background: var(--blue); color: white; border: none; border-radius: 6px;
+    padding: 8px 14px; font-size: 13px; cursor: pointer;
+  }
+  button.secondary { background: #fff; color: var(--blue-dark); border: 1px solid #8fb7d9; }
+  button.secondary:hover { background: var(--blue-soft); border-color: var(--blue); }
+  button.new-conversation { font-weight: 600; margin-left: 8px; }
+  button.danger { background: var(--tier3); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+  th, td { text-align: left; padding: 8px 10px; font-size: 13px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; }
+
+  /* Live Simulation */
+  .dual-container { display: flex; gap: 16px; height: calc(100vh - 220px); min-height: 420px; }
+  .chat-panel {
+    flex: 1; background: #dce8f3; border: 1px solid var(--border); border-radius: 10px;
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .chat-header {
+    padding: 13px 16px; background: #fff; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 14px;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .chat-header.baseline { border-top: 3px solid #6f8aa3; }
+  .chat-header.enhanced { border-top: 3px solid var(--blue); }
+  .messages { flex: 1; overflow-y: auto; padding: 18px 14px; display: flex; flex-direction: column; gap: 8px; }
+  .bubble { max-width: 85%; padding: 9px 12px; border-radius: 12px; font-size: 13px; line-height: 1.4; white-space: pre-wrap; box-shadow: 0 1px 1px rgba(34, 69, 99, .08); }
+  .bubble.user { align-self: flex-end; background: #cce8ff; color: #143c5c; border-bottom-right-radius: 3px; }
+  .bubble.bot { align-self: flex-start; background: #fff; border-bottom-left-radius: 3px; }
+  .bubble.bot.tier2 { background: #fff7df; border: 1px solid var(--tier2); color: #624b12; }
+  .bubble.bot.tier3 { background: #fff0ee; border: 1px solid var(--tier3); color: #76221d; }
+  .bubble.system { align-self: center; font-size: 11px; color: var(--muted); }
+  .badge { font-size: 10px; padding: 2px 6px; border-radius: 4px; margin-left: 6px; }
+  .badge.low { background: #223; color: var(--muted); }
+  .badge.moderate { background: #4a3a12; color: var(--tier2); }
+  .badge.high, .badge.critical { background: #4a1e1a; color: var(--tier3); }
+  .composer { display: flex; gap: 8px; padding: 12px; background: #fff; border-top: 1px solid var(--border); }
+  .composer input { flex: 1; }
+
+  /* Modal */
+  .modal-overlay {
+    display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+    align-items: center; justify-content: center; z-index: 100;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    width: 640px; max-width: 90vw; max-height: 85vh; overflow-y: auto; padding: 24px;
+  }
+  .modal-close { float: right; cursor: pointer; color: var(--muted); font-size: 18px; }
+  .metrics-table td.positive { color: var(--green); }
+  .metrics-table td.negative { color: var(--tier3); }
+  .status-line { font-size: 11px; color: var(--muted); margin-top: 6px; }
+  .history-list { display: grid; gap: 8px; }
+  .history-item { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 13px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-alt); }
+  .history-item strong { display: block; color: var(--blue-dark); }
+  .history-item small { color: var(--muted); }
+  @media (max-width: 800px) {
+    body { display: block; overflow: auto; }
+    .sidebar { width: 100%; border-right: 0; border-bottom: 1px solid var(--border); padding: 12px 0 0; }
+    .sidebar h1 { padding-bottom: 10px; }
+    .nav-item { display: inline-block; padding: 10px 12px; border-left: 0; border-bottom: 3px solid transparent; }
+    .nav-item.active { border-bottom-color: var(--blue); }
+    .main { padding: 20px 14px; }
+    .dual-container { height: auto; min-height: 0; flex-direction: column; }
+    .chat-panel { min-height: 360px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="sidebar">
+  <h1>Phishing Guard<br><span style="color:var(--muted); font-weight:400;">Dashboard</span></h1>
+  <div class="nav-item active" data-page="datasets"><span class="nav-icon">▦</span>Datasets</div>
+  <div class="nav-item" data-page="simulation"><span class="nav-icon">◌</span>Live Simulation</div>
+  <div class="nav-item" data-page="history"><span class="nav-icon">↺</span>Session History</div>
+</div>
+
+<div class="main">
+
+  <!-- ============ DATASETS PAGE ============ -->
+  <div class="page active" id="page-datasets">
+    <h2>Datasets</h2>
+    <div class="subtitle">Upload CSV datasets and compare both detection engines.</div>
+
+    <div class="card">
+      <div class="row">
+        <input type="file" id="fileInput" accept=".csv">
+        <button onclick="uploadDataset()">Upload</button>
+        <button class="secondary" onclick="openMetricsGuide()">Metrics</button>
+        <span class="status-line" id="uploadStatus"></span>
+      </div>
+    </div>
+
+    <div class="card">
+      <table id="datasetsTable">
+        <thead><tr><th>Filename</th><th>Rows</th><th>Columns</th><th>Actions</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ============ LIVE SIMULATION PAGE ============ -->
+  <div class="page" id="page-simulation">
+    <h2>Live Simulation</h2>
+    <div class="subtitle">Same message, sent to both engines at once. Session: <code id="sessionIdLabel"></code>
+      <button class="secondary new-conversation" onclick="newSession()">New Conversation</button>
+      <button class="secondary" onclick="openLiveMetrics()">Metrics</button>
+    </div>
+
+    <div class="dual-container">
+      <div class="chat-panel">
+        <div class="chat-header baseline">Original</div>
+        <div class="messages" id="messages-baseline"></div>
+      </div>
+      <div class="chat-panel">
+        <div class="chat-header enhanced">Enhanced</div>
+        <div class="messages" id="messages-enhanced"></div>
+      </div>
+    </div>
+    <div class="composer">
+      <input type="text" id="dualInput" placeholder="Type a message — sent to both engines..."
+             onkeydown="if(event.key==='Enter') sendDualMessage()">
+      <button onclick="sendDualMessage()">Send</button>
+    </div>
+    <div class="status-line" id="dualStatus"></div>
+  </div>
+
+  <!-- ============ SESSION HISTORY PAGE ============ -->
+  <div class="page" id="page-history">
+    <h2>Session History</h2>
+    <div class="subtitle">Reopen previous live comparisons and continue the conversation.</div>
+    <div class="card">
+      <div class="row"><button onclick="refreshSessionHistory()">Refresh history</button><span class="status-line" id="historyStatus"></span></div>
+    </div>
+    <div class="card"><div class="history-list" id="historyList"><p class="status-line">No saved sessions yet.</p></div></div>
+  </div>
+
+</div>
+
+<!-- ============ METRICS MODAL ============ -->
+<div class="modal-overlay" id="metricsModal">
+  <div class="modal">
+    <span class="modal-close" onclick="closeMetricsModal()">✕</span>
+    <h2>Comparison Results</h2>
+    <div id="metricsColumnPicker"></div>
+    <div id="metricsContent"></div>
+  </div>
+</div>
+
+<script>
+const SERVER = "http://localhost:5000";
+let sessionId = "session_" + Math.floor(Math.random() * 100000);
+let liveResults = { baseline: [], enhanced: [] };
+
+// ---------- Navigation ----------
+document.querySelectorAll(".nav-item").forEach(item => {
+  item.addEventListener("click", () => {
+    document.querySelectorAll(".nav-item").forEach(i => i.classList.remove("active"));
+    document.querySelectorAll(".page").forEach(p => p.classList.remove("active"));
+    item.classList.add("active");
+    document.getElementById("page-" + item.dataset.page).classList.add("active");
+    if (item.dataset.page === "history") refreshSessionHistory();
+  });
+});
+
+// ---------- Datasets tab ----------
+async function refreshDatasetsList() {
+  const resp = await fetch(SERVER + "/api/datasets/list");
+  const datasets = await resp.json();
+  const tbody = document.querySelector("#datasetsTable tbody");
+  tbody.innerHTML = "";
+  datasets.forEach(ds => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${ds.original_filename}</td>
+      <td>${ds.row_count}</td>
+      <td>${ds.columns.join(", ")}</td>
+      <td>
+        <button onclick='openAnalyzeModal(${JSON.stringify(ds).replace(/'/g, "&apos;")})'>Analyze</button>
+        <button class="danger" onclick="deleteDataset('${ds.id}')">Delete</button>
+      </td>`;
+    tbody.appendChild(tr);
+  });
+}
+
+async function uploadDataset() {
+  const fileInput = document.getElementById("fileInput");
+  if (!fileInput.files.length) return;
+  const formData = new FormData();
+  formData.append("file", fileInput.files[0]);
+  document.getElementById("uploadStatus").textContent = "Uploading...";
+  const resp = await fetch(SERVER + "/api/datasets/upload", { method: "POST", body: formData });
+  const data = await resp.json();
+  if (resp.ok) {
+    document.getElementById("uploadStatus").textContent = `Uploaded: ${data.row_count} rows`;
+    fileInput.value = "";
+    refreshDatasetsList();
+  } else {
+    document.getElementById("uploadStatus").textContent = "Error: " + data.error;
+  }
+}
+
+async function deleteDataset(id) {
+  await fetch(SERVER + "/api/datasets/" + id, { method: "DELETE" });
+  refreshDatasetsList();
+}
+
+// ---------- Metrics modal ----------
+function openAnalyzeModal(dataset) {
+  const columnOptions = dataset.columns.map(c => `<option value="${c}">${c}</option>`).join("");
+  document.getElementById("metricsColumnPicker").innerHTML = `
+    <div class="card">
+      <div class="row">
+        <label>Text column: <select id="pickTextCol">${columnOptions}</select></label>
+        <label>Label column: <select id="pickLabelCol">${columnOptions}</select></label>
+        <label>Positive label value: <input type="text" id="pickPositiveLabel" value="1" size="6"></label>
+        <label>Sample size: <input type="number" id="pickSampleSize" value="2000" size="6"></label>
+        <button onclick="runAnalysis('${dataset.id}')">Run Comparison</button>
+      </div>
+    </div>`;
+  document.getElementById("metricsContent").innerHTML = "";
+  document.getElementById("metricsModal").classList.add("open");
+}
+
+function closeMetricsModal() {
+  document.getElementById("metricsModal").classList.remove("open");
+}
+
+async function openMetricsGuide() {
+  document.getElementById("metricsColumnPicker").innerHTML = '<div class="card"><p class="status-line">Loading datasets...</p></div>';
+  document.getElementById("metricsContent").innerHTML = "";
+  document.getElementById("metricsModal").classList.add("open");
+  let datasets = [];
+  let loadError = "";
+  try {
+    const resp = await fetch(SERVER + "/api/datasets/list");
+    datasets = await resp.json();
+  } catch (error) {
+    loadError = "Start the Flask server to load datasets and calculate metrics.";
+  }
+  document.getElementById("metricsColumnPicker").innerHTML = `
+    <div class="card">
+      <div class="row">
+        <label>Dataset:
+          <select id="metricsDatasetPicker">
+            ${datasets.map(ds => `<option value="${ds.id}">${ds.original_filename}</option>`).join("")}
+          </select>
+        </label>
+        ${datasets.length ? '<button onclick="openSelectedMetrics()">Choose columns</button>' : ""}
+      </div>
+      ${loadError ? `<p class="status-line">${loadError}</p>` : datasets.length ? "" : '<p class="status-line">Upload a CSV dataset first to calculate comparison metrics.</p>'}
+    </div>`;
+}
+
+async function openSelectedMetrics() {
+  const datasetId = document.getElementById("metricsDatasetPicker").value;
+  const resp = await fetch(SERVER + "/api/datasets/list");
+  const datasets = await resp.json();
+  const dataset = datasets.find(item => item.id === datasetId);
+  if (dataset) openAnalyzeModal(dataset);
+}
+
+async function runAnalysis(datasetId) {
+  const textCol = document.getElementById("pickTextCol").value;
+  const labelCol = document.getElementById("pickLabelCol").value;
+  const positiveLabel = document.getElementById("pickPositiveLabel").value;
+  const sampleSize = parseInt(document.getElementById("pickSampleSize").value, 10);
+
+  document.getElementById("metricsContent").innerHTML = "<p>Running comparison, please wait...</p>";
+  const resp = await fetch(SERVER + `/api/datasets/${datasetId}/analyze`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      text_col: textCol, label_col: labelCol,
+      positive_label: positiveLabel, sample_size: sampleSize,
+    }),
+  });
+  const data = await resp.json();
+  if (!resp.ok) {
+    document.getElementById("metricsContent").innerHTML = `<p style="color:var(--tier3)">Error: ${data.error}</p>`;
+    return;
+  }
+  renderMetrics(data);
+}
+
+function fmtPct(x) { return (x * 100).toFixed(2) + "%"; }
+function deltaCell(x) {
+  const cls = x >= 0 ? "positive" : "negative";
+  const sign = x >= 0 ? "+" : "";
+  return `<td class="${cls}">${sign}${fmtPct(x)}</td>`;
+}
+
+function renderMetrics(data) {
+  const b = data.baseline, e = data.enhanced, d = data.delta;
+  document.getElementById("metricsContent").innerHTML = `
+    <p class="status-line">Rows used: ${data.rows_used} / ${data.rows_total} total
+      ${data.sampled ? "(sampled)" : "(full dataset)"}</p>
+    <table class="metrics-table">
+      <thead><tr><th>Metric</th><th>Baseline</th><th>Enhanced</th><th>Delta</th></tr></thead>
+      <tbody>
+        <tr><td>Accuracy</td><td>${fmtPct(b.accuracy)}</td><td>${fmtPct(e.accuracy)}</td>${deltaCell(d.accuracy)}</tr>
+        <tr><td>Precision</td><td>${fmtPct(b.precision)}</td><td>${fmtPct(e.precision)}</td>${deltaCell(d.precision)}</tr>
+        <tr><td>Recall</td><td>${fmtPct(b.recall)}</td><td>${fmtPct(e.recall)}</td>${deltaCell(d.recall)}</tr>
+        <tr><td>F1-score</td><td>${fmtPct(b.f1)}</td><td>${fmtPct(e.f1)}</td>${deltaCell(d.f1)}</tr>
+        <tr><td>False Positive Rate</td><td>${fmtPct(b.fpr)}</td><td>${fmtPct(e.fpr)}</td>${deltaCell(-d.fpr)}</tr>
+        <tr><td>TP / FP / TN / FN</td>
+            <td>${b.tp} / ${b.fp} / ${b.tn} / ${b.fn}</td>
+            <td>${e.tp} / ${e.fp} / ${e.tn} / ${e.fn}</td><td>—</td></tr>
+        <tr><td>Speed</td>
+            <td>${b.messages_per_sec.toFixed(1)} msg/s</td>
+            <td>${e.messages_per_sec.toFixed(1)} msg/s</td><td>—</td></tr>
+      </tbody>
+    </table>`;
+}
+
+function liveMetricSummary(results) {
+  const messages = results.length;
+  const detections = results.reduce((total, result) => total + result.detections.length, 0);
+  const flagged = results.filter(result => result.detections.length > 0).length;
+  const critical = results.filter(result => result.session_tier >= 3).length;
+  const averageTier = messages ? results.reduce((total, result) => total + result.session_tier, 0) / messages : 0;
+  return { messages, detections, flagged, critical, averageTier };
+}
+
+function scoreValue(value) {
+  return typeof value === "number" ? value.toFixed(3) : "—";
+}
+
+function renderScoreBreakdown(results) {
+  const rows = [];
+  results.forEach((result, messageIndex) => {
+    result.detections.forEach(detection => {
+      const score = detection.score_breakdown;
+      if (!score) return;
+      rows.push(`<tr>
+        <td>M${messageIndex + 1}: ${detection.match_type || "signal"}</td>
+        <td>${score.match_layer}</td>
+        <td>${scoreValue(score.token_score)}</td>
+        <td>${scoreValue(score.proximity_delta)}</td>
+        <td>${scoreValue(score.url_multiplier)}</td>
+        <td>${scoreValue(score.penalty)}</td>
+        <td>${scoreValue(score.final_risk)}</td>
+      </tr>`);
+    });
+  });
+  if (!rows.length) {
+    return '<p class="status-line">No enhanced scoring components were recorded in this session.</p>';
+  }
+  return `<table class="metrics-table score-table">
+    <thead><tr><th>Detection</th><th>Layer</th><th>Token</th><th>Proximity</th><th>URL x</th><th>Penalty</th><th>Final risk</th></tr></thead>
+    <tbody>${rows.join("")}</tbody>
+  </table>`;
+}
+
+function renderLiveMetrics() {
+  const baseline = liveMetricSummary(liveResults.baseline);
+  const enhanced = liveMetricSummary(liveResults.enhanced);
+  document.getElementById("metricsColumnPicker").innerHTML = `
+    <div class="card">
+      <p class="status-line">Session: ${sessionId} · ${baseline.messages} message${baseline.messages === 1 ? "" : "s"} checked</p>
+      <p>These metrics summarize the messages checked in this live comparison session.</p>
+    </div>`;
+  document.getElementById("metricsContent").innerHTML = `
+    <table class="metrics-table">
+      <thead><tr><th>Live metric</th><th>Original</th><th>Enhanced</th><th>Difference</th></tr></thead>
+      <tbody>
+        <tr><td>Messages checked</td><td>${baseline.messages}</td><td>${enhanced.messages}</td><td>—</td></tr>
+        <tr><td>Total detections</td><td>${baseline.detections}</td><td>${enhanced.detections}</td><td>${enhanced.detections - baseline.detections >= 0 ? "+" : ""}${enhanced.detections - baseline.detections}</td></tr>
+        <tr><td>Flagged messages</td><td>${baseline.flagged}</td><td>${enhanced.flagged}</td><td>${enhanced.flagged - baseline.flagged >= 0 ? "+" : ""}${enhanced.flagged - baseline.flagged}</td></tr>
+        <tr><td>Tier 3 / critical</td><td>${baseline.critical}</td><td>${enhanced.critical}</td><td>${enhanced.critical - baseline.critical >= 0 ? "+" : ""}${enhanced.critical - baseline.critical}</td></tr>
+        <tr><td>Average session tier</td><td>${baseline.averageTier.toFixed(2)}</td><td>${enhanced.averageTier.toFixed(2)}</td><td>—</td></tr>
+      </tbody>
+    </table>
+    <h3>Enhanced scoring breakdown</h3>
+    <p class="status-line">Final risk = (token score + proximity delta − penalty) × URL multiplier.</p>
+    ${renderScoreBreakdown(liveResults.enhanced)}`;
+  document.getElementById("metricsModal").classList.add("open");
+}
+
+function openLiveMetrics() {
+  renderLiveMetrics();
+}
+
+// ---------- Live Simulation tab ----------
+document.getElementById("sessionIdLabel").textContent = sessionId;
+
+function addBubble(panelId, text, cls) {
+  const div = document.createElement("div");
+  div.className = "bubble " + cls;
+  div.textContent = text;
+  document.getElementById(panelId).appendChild(div);
+  div.scrollIntoView({ behavior: "smooth" });
+}
+
+function severityBadge(severity) {
+  if (!severity || severity === "none") return "";
+  return `<span class="badge ${severity}">${severity.toUpperCase()}</span>`;
+}
+
+async function sendDualMessage() {
+  const input = document.getElementById("dualInput");
+  const text = input.value.trim();
+  if (!text) return;
+  addBubble("messages-baseline", text, "user");
+  addBubble("messages-enhanced", text, "user");
+  input.value = "";
+
+  document.getElementById("dualStatus").textContent = "Checking both engines...";
+  let resp;
+  let data;
+  try {
+    resp = await fetch(SERVER + "/api/dual/message", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sessionId, text }),
+    });
+    data = await resp.json();
+  } catch (error) {
+    const message = "Server unavailable. Start viber_bot/server.py to receive engine warnings.";
+    addBubble("messages-baseline", message, "system");
+    addBubble("messages-enhanced", message, "system");
+    document.getElementById("dualStatus").textContent = message;
+    return;
+  }
+  if (!resp.ok) {
+    const message = data.error || "The live simulation could not process this message.";
+    addBubble("messages-baseline", message, "system");
+    addBubble("messages-enhanced", message, "system");
+    document.getElementById("dualStatus").textContent = message;
+    return;
+  }
+
+  for (const engineName of ["baseline", "enhanced"]) {
+    const side = data[engineName];
+    liveResults[engineName].push(side);
+    const panelId = "messages-" + engineName;
+    if (side.reply_text) {
+      const tierClass = side.session_tier >= 3 ? "tier3" : side.session_tier === 2 ? "tier2" : "";
+      addBubble(panelId, side.reply_text, "bot " + tierClass);
+    } else if (side.detections.length > 0) {
+      addBubble(panelId, `(flagged silently — Tier 1, severity: ${side.severity}, not shown to user)`, "system");
+    } else {
+      addBubble(panelId, "(no detection)", "system");
+    }
+  }
+  document.getElementById("dualStatus").textContent = "Both engines checked this message.";
+}
+
+async function newSession() {
+  await fetch(SERVER + "/api/dual/reset/" + sessionId, { method: "POST" });
+  sessionId = "session_" + Math.floor(Math.random() * 100000);
+  document.getElementById("sessionIdLabel").textContent = sessionId;
+  document.getElementById("messages-baseline").innerHTML = "";
+  document.getElementById("messages-enhanced").innerHTML = "";
+  liveResults = { baseline: [], enhanced: [] };
+}
+
+function formatSessionDate(timestamp) {
+  return new Date(timestamp * 1000).toLocaleString();
+}
+
+async function refreshSessionHistory() {
+  const status = document.getElementById("historyStatus");
+  const list = document.getElementById("historyList");
+  status.textContent = "Loading...";
+  const resp = await fetch(SERVER + "/api/dual/sessions");
+  const sessions = await resp.json();
+  status.textContent = `${sessions.length} saved session${sessions.length === 1 ? "" : "s"}`;
+  list.innerHTML = "";
+  if (!sessions.length) {
+    list.innerHTML = '<p class="status-line">No saved sessions yet. Send a message in Live Simulation to create one.</p>';
+    return;
+  }
+  sessions.forEach(session => {
+    const item = document.createElement("div");
+    item.className = "history-item";
+    item.innerHTML = `<div><strong>${session.session_id}</strong><small>${session.message_count} message${session.message_count === 1 ? "" : "s"} · ${formatSessionDate(session.updated_at)}</small></div>`;
+    const button = document.createElement("button");
+    button.textContent = "Open";
+    button.onclick = () => loadSession(session.session_id);
+    item.appendChild(button);
+    list.appendChild(item);
+  });
+}
+
+function renderStoredResult(panelId, result) {
+  if (result.reply_text) {
+    const tierClass = result.session_tier >= 3 ? "tier3" : result.session_tier === 2 ? "tier2" : "";
+    addBubble(panelId, result.reply_text, "bot " + tierClass);
+  } else if (result.detections.length > 0) {
+    addBubble(panelId, `(flagged silently — Tier 1, severity: ${result.severity}, not shown to user)`, "system");
+  } else {
+    addBubble(panelId, "(no detection)", "system");
+  }
+}
+
+async function loadSession(id) {
+  const resp = await fetch(SERVER + "/api/dual/sessions/" + encodeURIComponent(id));
+  if (!resp.ok) return;
+  const session = await resp.json();
+  sessionId = session.session_id;
+  document.getElementById("sessionIdLabel").textContent = sessionId;
+  document.getElementById("messages-baseline").innerHTML = "";
+  document.getElementById("messages-enhanced").innerHTML = "";
+  liveResults = { baseline: [], enhanced: [] };
+  session.messages.forEach(message => {
+    addBubble("messages-baseline", message.text, "user");
+    addBubble("messages-enhanced", message.text, "user");
+    renderStoredResult("messages-baseline", message.results.baseline);
+    renderStoredResult("messages-enhanced", message.results.enhanced);
+    liveResults.baseline.push(message.results.baseline);
+    liveResults.enhanced.push(message.results.enhanced);
+  });
+  document.querySelector('[data-page="simulation"]').click();
+}
+
+// ---------- Init ----------
+refreshDatasetsList();
+</script>
+</body>
+</html>

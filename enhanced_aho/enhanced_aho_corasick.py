@@ -734,7 +734,15 @@ fili
                                 "risk_score": round(final_risk, 3),
                                 "match_type": "exact",
                                 "error_count": 0,
-                                "context": context_window.strip()
+                                "context": context_window.strip(),
+                                "score_breakdown": {
+                                    "match_layer": "exact token (Aho-Corasick)",
+                                    "token_score": 1.25,
+                                    "proximity_delta": round(proximity_delta, 3),
+                                    "url_multiplier": url_risk,
+                                    "penalty": 0.0,
+                                    "final_risk": round(final_risk, 3),
+                                },
                             })
 
         # ── Layer 2: Bitap fuzzy search (catches residual obfuscation) ──
@@ -778,7 +786,15 @@ fili
                         "risk_score": round(final_risk, 3),
                         "match_type": "fuzzy",
                         "error_count": error_count,
-                        "context": context_window.strip()
+                        "context": context_window.strip(),
+                        "score_breakdown": {
+                            "match_layer": "fuzzy token (Bitap)",
+                            "token_score": 1.0,
+                            "proximity_delta": round(proximity_delta, 3),
+                            "url_multiplier": url_risk,
+                            "penalty": round(fuzzy_penalty, 3),
+                            "final_risk": round(final_risk, 3),
+                        },
                     })
 
         # ── Layer 3: Affix-aware search (O3) ──
@@ -807,7 +823,15 @@ fili
                     "risk_score": round(final_risk, 3),
                     "match_type": "affix",
                     "error_count": 0,
-                    "context": context_window.strip()
+                    "context": context_window.strip(),
+                    "score_breakdown": {
+                        "match_layer": "affix token",
+                        "token_score": 1.0,
+                        "proximity_delta": round(proximity_delta, 3),
+                        "url_multiplier": url_risk,
+                        "penalty": affix_penalty,
+                        "final_risk": round(final_risk, 3),
+                    },
                 })
 
         # ── Layer 4: Heuristic anomaly fallback (dictionary-independent) ──
@@ -822,6 +846,15 @@ fili
                     "error_count": 0,
                     "context": context_window,
                     "signals": anomaly_signals,
+                    "score_breakdown": {
+                        "match_layer": "anomaly heuristic",
+                        "token_score": 0.0,
+                        "proximity_delta": 0.0,
+                        "url_multiplier": 1.0,
+                        "penalty": 0.0,
+                        "anomaly_score": anomaly_score,
+                        "final_risk": round(0.95 + (anomaly_score * 0.4), 3),
+                    },
                 })
 
         return results

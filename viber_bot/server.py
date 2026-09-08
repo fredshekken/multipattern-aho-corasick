@@ -16,7 +16,12 @@ what is realistically achievable with the officially documented API.
 """
 
 import os
+import csv
+import json
 import logging
+import sys
+import time
+import uuid
 from collections import defaultdict
 from pathlib import Path
 
@@ -28,6 +33,9 @@ from baseline_aho_corasick import BaselineAhoCorasick
 from viber_client import ViberClient
 from conversation_tracker import ConversationTracker
 from detection_log import DetectionLog
+from compare_engines import load_csv, evaluate, baseline_predict, enhanced_predict
+
+csv.field_size_limit(sys.maxsize)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("viber_phishing_guard")
@@ -40,6 +48,21 @@ PATTERN_FILE = os.environ.get(
     str(Path(__file__).resolve().parent.parent / "enhanced_aho" / "default_patterns.txt"),
 )
 ANOMALY_THRESHOLD = float(os.environ.get("ANOMALY_THRESHOLD", "0.45"))
+
+# ── Dataset storage (Dashboard "Datasets" tab) ──────────────────────────
+UPLOADED_DATASETS_DIR = Path(__file__).resolve().parent / "uploaded_datasets"
+UPLOADED_DATASETS_DIR.mkdir(exist_ok=True)
+DATASET_INDEX_PATH = UPLOADED_DATASETS_DIR / "index.json"
+
+
+def _load_dataset_index():
+    if DATASET_INDEX_PATH.exists():
+        return json.loads(DATASET_INDEX_PATH.read_text(encoding="utf-8"))
+    return {}
+
+
+def _save_dataset_index(index):
+    DATASET_INDEX_PATH.write_text(json.dumps(index, indent=2), encoding="utf-8")
 
 # ── Simulation mode ────────────────────────────────────────────────────
 # Real Viber bot creation now requires a paid commercial application (since
@@ -131,6 +154,22 @@ def _pattern_summary(detections):
     return ", ".join(unique) if unique else "suspicious content"
 
 
+def build_reply_for_tier(session_tier, detections, mode_tag=""):
+    """
+    Shared logic for turning a session tier into a reply. Returns
+    (reply_text_or_None, keyboard_or_None). Used by both the live Viber
+    webhook and the dashboard's dual-engine comparison endpoint, so the two
+    surfaces can never drift into inconsistent behavior.
+    """
+    if session_tier <= 0 or session_tier == 1:
+        return None, None
+    patterns = _pattern_summary(detections)
+    if session_tier == 2:
+        return mode_tag + TIER_2_TEMPLATE.format(patterns=patterns), None
+    return (mode_tag + TIER_3_TEMPLATE.format(patterns=patterns),
+            ViberClient.acknowledgment_keyboard())
+
+
 @app.route("/webhook", methods=["POST"])
 def webhook():
     event = request.get_json(silent=True) or {}
@@ -186,23 +225,13 @@ def webhook():
     )
 
     mode_tag = f"[{current_mode['value'].upper()}] "
+    reply_text, keyboard = build_reply_for_tier(session_tier, assessment["detections"], mode_tag)
 
-    if session_tier <= 0:
-        pass  # clean message, nothing to do
-    elif session_tier == 1:
+    if session_tier == 1:
         logger.info("[Tier 1 - flagged, silent] chat=%s text=%r", chat_id, text)
-    elif session_tier == 2:
-        patterns = _pattern_summary(assessment["detections"])
-        deliver(sender_id, mode_tag + TIER_2_TEMPLATE.format(patterns=patterns))
-        logger.info("[Tier 2 - warning sent] chat=%s text=%r", chat_id, text)
-    elif session_tier >= 3:
-        patterns = _pattern_summary(assessment["detections"])
-        deliver(
-            sender_id,
-            mode_tag + TIER_3_TEMPLATE.format(patterns=patterns),
-            keyboard=ViberClient.acknowledgment_keyboard(),
-        )
-        logger.info("[Tier 3 - blocked/escalated] chat=%s text=%r", chat_id, text)
+    elif reply_text:
+        deliver(sender_id, reply_text, keyboard=keyboard)
+        logger.info("[Tier %d - reply sent] chat=%s text=%r", session_tier, chat_id, text)
 
     return jsonify({"status": 0}), 200
 
@@ -253,6 +282,212 @@ def get_logs(chat_id):
 def get_all_flagged():
     min_tier = int(request.args.get("min_tier", 1))
     return jsonify(log.all_flagged(min_tier=min_tier)), 200
+
+
+# ── Dashboard: Datasets tab ──────────────────────────────────────────────
+
+def _sniff_columns(file_path):
+    with open(file_path, newline="", encoding="utf-8", errors="replace") as f:
+        reader = csv.reader(f)
+        header = next(reader, [])
+        row_count = sum(1 for _ in reader)
+    return header, row_count
+
+
+@app.route("/api/datasets/upload", methods=["POST"])
+def upload_dataset():
+    if "file" not in request.files:
+        return jsonify({"error": "No file part named 'file' in the upload"}), 400
+    uploaded = request.files["file"]
+    filename = uploaded.filename
+    if not filename or not filename.lower().endswith(".csv"):
+        return jsonify({"error": "Only .csv files are accepted"}), 400
+
+    dataset_id = uuid.uuid4().hex[:12]
+    stored_name = f"{dataset_id}_{filename}"
+    stored_path = UPLOADED_DATASETS_DIR / stored_name
+    uploaded.save(stored_path)
+
+    try:
+        columns, row_count = _sniff_columns(stored_path)
+    except Exception as exc:
+        stored_path.unlink(missing_ok=True)
+        return jsonify({"error": f"Could not read CSV: {exc}"}), 400
+
+    index = _load_dataset_index()
+    index[dataset_id] = {
+        "id": dataset_id,
+        "original_filename": uploaded.filename,
+        "stored_filename": stored_name,
+        "columns": columns,
+        "row_count": row_count,
+        "uploaded_at": time.time(),
+    }
+    _save_dataset_index(index)
+    return jsonify(index[dataset_id]), 200
+
+
+@app.route("/api/datasets/list", methods=["GET"])
+def list_datasets():
+    index = _load_dataset_index()
+    return jsonify(list(index.values())), 200
+
+
+@app.route("/api/datasets/<dataset_id>", methods=["DELETE"])
+def delete_dataset(dataset_id):
+    index = _load_dataset_index()
+    entry = index.pop(dataset_id, None)
+    if entry is None:
+        return jsonify({"error": "Dataset not found"}), 404
+    (UPLOADED_DATASETS_DIR / entry["stored_filename"]).unlink(missing_ok=True)
+    _save_dataset_index(index)
+    return jsonify({"deleted": dataset_id}), 200
+
+
+@app.route("/api/datasets/<dataset_id>/analyze", methods=["POST"])
+def analyze_dataset(dataset_id):
+    """
+    Runs the same baseline-vs-enhanced comparison as compare_engines.py, but
+    over HTTP for the dashboard's metrics modal. Capped to a sample by
+    default (analyze is meant for fast, interactive exploration) — use the
+    compare_engines.py CLI directly for the full-dataset official numbers
+    reported in Chapter 4.
+    """
+    index = _load_dataset_index()
+    entry = index.get(dataset_id)
+    if entry is None:
+        return jsonify({"error": "Dataset not found"}), 404
+
+    body = request.get_json(silent=True) or {}
+    text_col = body.get("text_col")
+    label_col = body.get("label_col")
+    positive_label = body.get("positive_label", "1")
+    max_text_chars = body.get("max_text_chars", 5000)
+    sample_size = body.get("sample_size", 2000)
+
+    if not text_col or not label_col:
+        return jsonify({"error": "text_col and label_col are required"}), 400
+    if text_col not in entry["columns"] or label_col not in entry["columns"]:
+        return jsonify({"error": "text_col/label_col not found in this dataset's columns",
+                         "available_columns": entry["columns"]}), 400
+
+    dataset_path = UPLOADED_DATASETS_DIR / entry["stored_filename"]
+    full_dataset = load_csv(str(dataset_path), text_col, label_col, positive_label,
+                             max_text_chars=max_text_chars)
+
+    truncated = False
+    if sample_size and len(full_dataset) > sample_size:
+        import random
+        rng = random.Random(42)
+        dataset = rng.sample(full_dataset, sample_size)
+        truncated = True
+    else:
+        dataset = full_dataset
+
+    baseline_metrics = evaluate(_engines["baseline"], dataset, baseline_predict)
+    enhanced_metrics = evaluate(_engines["enhanced"], dataset, enhanced_predict)
+    delta = {
+        key: enhanced_metrics[key] - baseline_metrics[key]
+        for key in ("accuracy", "precision", "recall", "f1", "fpr")
+    }
+
+    return jsonify({
+        "dataset_id": dataset_id,
+        "rows_used": len(dataset),
+        "rows_total": len(full_dataset),
+        "sampled": truncated,
+        "baseline": baseline_metrics,
+        "enhanced": enhanced_metrics,
+        "delta": delta,
+    }), 200
+
+
+# ── Dashboard: Live Simulation tab (side-by-side dual engine) ───────────
+_dual_trackers = {"baseline": ConversationTracker(), "enhanced": ConversationTracker()}
+_dual_sessions = {}
+
+
+@app.route("/api/dual/message", methods=["POST"])
+def dual_message():
+    """
+    Runs the SAME message through both engines simultaneously and returns
+    both sides' full assessment in one response — the backend for the
+    dashboard's side-by-side Live Simulation view. Unlike /webhook, this
+    returns results directly (synchronous) instead of via the Viber API or
+    the simulation outbox, since the dashboard renders both panels itself.
+    """
+    body = request.get_json(silent=True) or {}
+    session_id = body.get("session_id", "default")
+    text = body.get("text", "")
+    if not text:
+        return jsonify({"error": "text is required"}), 400
+
+    results = {}
+    for engine_name in ("baseline", "enhanced"):
+        engine = _engines[engine_name]
+        state = _dual_trackers[engine_name].get(session_id)
+        assessment = engine.assess_message(text)
+        message_tier = assessment["action_tier"]
+        session_tier = state.session_tier(message_tier)
+        state.record(message_tier, assessment["detections"])
+        reply_text, keyboard = build_reply_for_tier(session_tier, assessment["detections"])
+        results[engine_name] = {
+            "detections": assessment["detections"],
+            "severity": assessment.get("severity"),
+            "message_tier": message_tier,
+            "session_tier": session_tier,
+            "reply_text": reply_text,
+            "has_block_keyboard": keyboard is not None,
+        }
+    session = _dual_sessions.setdefault(
+        session_id,
+        {"session_id": session_id, "created_at": time.time(), "messages": []},
+    )
+    session["updated_at"] = time.time()
+    session["messages"].append({"text": text, "results": results})
+    return jsonify(results), 200
+
+
+@app.route("/api/dual/reset/<session_id>", methods=["POST"])
+def dual_reset(session_id):
+    for tracker_by_engine in _dual_trackers.values():
+        tracker_by_engine.reset(session_id)
+    return jsonify({"reset": session_id}), 200
+
+
+@app.route("/api/dual/sessions", methods=["GET"])
+def dual_sessions():
+    sessions = [
+        {
+            "session_id": session["session_id"],
+            "created_at": session["created_at"],
+            "updated_at": session.get("updated_at", session["created_at"]),
+            "message_count": len(session["messages"]),
+        }
+        for session in _dual_sessions.values()
+    ]
+    sessions.sort(key=lambda item: item["updated_at"], reverse=True)
+    return jsonify(sessions), 200
+
+
+@app.route("/api/dual/sessions/<session_id>", methods=["GET"])
+def dual_session_detail(session_id):
+    session = _dual_sessions.get(session_id)
+    if session is None:
+        return jsonify({"error": "Session not found"}), 404
+    return jsonify(session), 200
+
+
+@app.route("/api/datasets/upload", methods=["OPTIONS"])
+@app.route("/api/datasets/list", methods=["OPTIONS"])
+@app.route("/api/datasets/<dataset_id>", methods=["OPTIONS"])
+@app.route("/api/datasets/<dataset_id>/analyze", methods=["OPTIONS"])
+@app.route("/api/dual/message", methods=["OPTIONS"])
+@app.route("/api/dual/reset/<session_id>", methods=["OPTIONS"])
+@app.route("/api/dual/sessions", methods=["OPTIONS"])
+@app.route("/api/dual/sessions/<session_id>", methods=["OPTIONS"])
+def api_cors_preflight(dataset_id=None, session_id=None):
+    return jsonify({}), 200
 
 
 if __name__ == "__main__":
