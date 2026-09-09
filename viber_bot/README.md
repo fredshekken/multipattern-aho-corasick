@@ -47,10 +47,10 @@ user-facing intervention tiers used here:
 
 | final_risk    | Severity (thesis Fig. 3.1) | Action tier | Behavior                     |
 |---------------|-----------------------------|-------------|-------------------------------|
-| < 1.5         | Low                         | **1**       | Logged only, no interruption |
-| 1.5 – 2.49    | Moderate                    | **2**       | Warning message sent         |
-| 2.5 – 3.99    | High                        | **3**       | Block card + acknowledgment  |
-| ≥ 4.0         | Critical                    | **3**       | Block card + acknowledgment  |
+| < 1.142       | Low                         | **1**       | Logged only, no interruption |
+| 1.142 – 1.499 | Moderate                    | **2**       | Warning message sent         |
+| 1.500 – 2.499 | High                        | **3**       | High warning sent            |
+| ≥ 2.500       | Critical                    | **3**       | Block card + acknowledgment  |
 
 On top of per-message scoring, `conversation_tracker.py` reviews the whole
 session: if two or more messages within a rolling window each reach Tier 2+,
@@ -77,13 +77,13 @@ Be precise about this distinction if a panelist probes it:
   to add `from_pattern_file()` and `assess_message()` for interface parity
   with the enhanced engine. Adds no detection logic — see its docstring.
 
-**Deployment addition (built for the Viber demo, not independently
-validated against the datasets, and should be framed as an application
-layer rather than a tested objective):**
+**Deployment addition (built for the Viber demo and should be framed as an
+application layer rather than a tested objective):**
 - `conversation_tracker.py` — multi-message session escalation.
-- The 4-band risk thresholds in `classify_risk_level()` (low/moderate/high/
-  critical cut points) — a reasoned adaptation of the CVSS-style severity
-  convention, not empirically derived from your datasets.
+- The 4-band risk thresholds in `enhanced_aho_corasick.py` use the empirical
+  cutoffs documented by `derive_severity_thresholds.py`: 1.142 for Moderate,
+  1.500 for High, and 2.500 for Critical. Conversation escalation remains a
+  separate rule that can promote repeated Tier 2+ messages to Tier 3.
 - `server.py`, `viber_client.py`, `detection_log.py` — the bot plumbing
   itself.
 
@@ -100,6 +100,37 @@ python compare_engines.py --csv your_dataset.csv \
 
 Run it with no `--csv` first to sanity-check against a tiny built-in sample
 before pointing it at your real Kaggle CSVs.
+
+## Local Dashboard
+
+`dashboard.html` is a local Flask-backed interface for demonstrating the
+system without a real Viber account. It provides:
+
+- **Datasets** — Upload, analyze, and delete CSV datasets. Uploaded files and
+  metadata are stored under `uploaded_datasets/`.
+- **Live Simulation** — Sends each message to both `Original` (the unmodified
+  Aho-Corasick adapter) and `Enhanced` at the same time.
+- **Live Metrics** — Shows per-session detection totals, tier comparison, and
+  grouped enhanced scoring details for every message.
+- **Session History** — Reopen or delete saved comparison conversations.
+
+The scoring breakdown identifies the pattern and matched token, then shows
+the token score, proximity delta, URL multiplier and segment, penalty, and
+final risk:
+
+```text
+final risk = (token score + proximity delta - penalty) x URL multiplier
+```
+
+Start it from the repository root on Windows PowerShell:
+
+```powershell
+Start-Process -FilePath ".\.venv\Scripts\python.exe" -ArgumentList "viber_bot\server.py" -WorkingDirectory (Get-Location); Start-Process -FilePath (Resolve-Path "viber_bot\dashboard.html")
+```
+
+Keep the server process running while using the dashboard. Session history is
+held in memory for the current server process; deleting a session also clears
+its conversation tracker state.
 
 ## Live baseline/enhanced toggle (Chapter 4: System Output)
 
@@ -183,6 +214,8 @@ and watch the server logs / your Viber chat for the response.
 ## Files
 
 - `server.py` — Flask webhook, ties everything together.
+- `dashboard.html` — local dashboard for datasets, live comparison, metrics,
+  and session history.
 - `enhanced_aho_corasick.py` — the detection engine (Objectives 1-4 + risk
   tier classification).
 - `conversation_tracker.py` — session-level escalation logic.
@@ -193,6 +226,9 @@ and watch the server logs / your Viber chat for the response.
 - `default_patterns.txt` — categorized phishing keyword dictionary.
 - `test_local.py` — local smoke test, no real Viber account needed
   (mocks the outgoing Viber calls, runs the full detection + tiering logic).
+- `calibrate_thresholds.py` — validation-based threshold calibration for the
+  rule-based enhanced engine.
+- `derive_severity_thresholds.py` — empirical severity cutoff analysis.
 
 ## Known limitations for the defense
 

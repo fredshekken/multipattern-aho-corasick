@@ -27,6 +27,15 @@ A rule-based phishing detection system using an enhanced Aho-Corasick automaton 
 - **Conversation escalation** — Escalates repeated Tier 2+ messages within the rolling conversation window
 - **Comparison harness** — Evaluates baseline and enhanced engines on the same labeled CSV dataset
 
+### Local Dashboard
+
+- **Datasets** — Upload, analyze, and delete labeled CSV files.
+- **Live Simulation** — Sends the same message to the original and enhanced engines side by side, with Viber-style warning bubbles.
+- **Live Metrics** — Compares detections, tiers, severity, and average session risk for the active conversation.
+- **Scoring Breakdown** — Groups enhanced detections by message and shows the pattern, matched token, token score, proximity delta, URL multiplier, penalty, and final risk.
+- **Session History** — Reopen or delete previous live comparison conversations.
+- **Flat blue UI** — The dashboard uses a responsive blue interface with flat icons and no 3D controls.
+
 ## Software / Libraries
 
 | Software/Library | Version | Function/Purpose |
@@ -56,10 +65,13 @@ The core `EnhancedAhoCorasick` algorithm is dependency-free and runs with Python
 │   ├── visualizer.py                 # Demo visualizer
 │   └── test.py                       # Test suite
 ├── viber_bot/
-│   ├── server.py                      # Flask webhook and risk-tier responses
+│   ├── server.py                      # Flask API, webhook, and live dashboard backend
+│   ├── dashboard.html                  # Local dashboard for datasets and live comparison
 │   ├── _bootstrap.py                  # Adds shared engine directories to sys.path
 │   ├── baseline_aho_corasick.py      # Baseline adapter
 │   ├── compare_engines.py            # Dataset comparison harness
+│   ├── calibrate_thresholds.py       # Threshold calibration against labeled data
+│   ├── derive_severity_thresholds.py # Empirical severity cutoff analysis
 │   └── test_local.py                 # Mocked webhook smoke test
 ├── datasets/                         # Local evaluation datasets
 ├── pyrightconfig.json                # Repository-wide Python import paths
@@ -84,6 +96,9 @@ source .venv/bin/activate  # On Windows: .venv\Scripts\Activate.ps1
 
 # Streamlit UI:
 pip install -r requirements.txt
+
+# Flask dashboard and Viber integration:
+pip install -r viber_bot/requirements.txt
 ```
 
 ### Running the App
@@ -93,6 +108,35 @@ streamlit run enhanced_aho/streamlit_app.py
 ```
 
 The app will open at `http://localhost:8501`.
+
+### Running the Local Dashboard
+
+From the repository root on Windows PowerShell, start the Flask backend and
+open the dashboard with one command:
+
+```powershell
+Start-Process -FilePath ".\.venv\Scripts\python.exe" -ArgumentList "viber_bot\server.py" -WorkingDirectory (Get-Location); Start-Process -FilePath (Resolve-Path "viber_bot\dashboard.html")
+```
+
+The backend listens on `http://localhost:5000`. Keep its terminal process
+running while using `viber_bot/dashboard.html` in the browser. The dashboard
+runs locally in simulation mode when `VIBER_AUTH_TOKEN` is not set.
+
+The dashboard has three tabs plus a Metrics action in the Live Simulation header:
+
+1. **Datasets** — Upload, analyze, and delete CSV datasets.
+2. **Live Simulation** — Compare `Original` and `Enhanced` on the same message.
+3. **Session History** — Reopen or delete saved live comparison sessions.
+4. **Metrics action** — View live comparison totals and grouped per-message scoring.
+
+The live scoring breakdown uses the formula:
+
+```text
+final risk = (token score + proximity delta - penalty) x URL multiplier
+```
+
+It also identifies the matching layer (exact Aho-Corasick, fuzzy Bitap,
+affix, or anomaly), dictionary pattern, matched token, and URL segment.
 
 ### Loading a Dataset
 
@@ -168,6 +212,16 @@ python viber_bot/compare_engines.py \
 	--label-col label \
 	--positive-label phishing
 ```
+
+Threshold calibration uses different option names and requires the pattern
+file explicitly:
+
+```powershell
+& ".\.venv\Scripts\python.exe" "viber_bot\calibrate_thresholds.py" --csv "datasets\philippine_sms_balanced.csv" --text-col text --label-col label --positive-label 1 --pattern-file "enhanced_aho\default_patterns.txt"
+```
+
+The script performs validation-based threshold selection for the rule-based
+engine; it does not train a machine-learning model.
 
 ## Dataset Integration
 
