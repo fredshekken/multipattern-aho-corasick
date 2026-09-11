@@ -478,14 +478,49 @@ def dual_session_detail(session_id):
     return jsonify(session), 200
 
 
-@app.route("/api/dual/sessions/<session_id>", methods=["DELETE"])
-def delete_dual_session(session_id):
-    session = _dual_sessions.pop(session_id, None)
-    for tracker_by_engine in _dual_trackers.values():
-        tracker_by_engine.reset(session_id)
+@app.route("/api/dual/report", methods=["POST"])
+def dual_report():
+    """
+    Marks a specific message (on one engine's side) as a user-confirmed
+    phishing report, distinct from a passive 'acknowledged' dismissal.
+    Returns a confirmation payload for the dashboard's report modal.
+    """
+    body = request.get_json(silent=True) or {}
+    session_id = body.get("session_id", "")
+    engine_name = body.get("engine_name", "")
+    message_text = body.get("text", "")
+
+    session = _dual_sessions.get(session_id)
     if session is None:
         return jsonify({"error": "Session not found"}), 404
-    return jsonify({"deleted": session_id}), 200
+
+    matched_message = None
+    for message in session["messages"]:
+        if message["text"] == message_text and engine_name in message["results"]:
+            message["results"][engine_name]["user_reported"] = True
+            matched_message = message
+            break
+
+    if matched_message is None:
+        return jsonify({"error": "Message not found in this session"}), 404
+
+    side = matched_message["results"][engine_name]
+    pattern_names = []
+    for detection in side["detections"]:
+        alert = detection.get("alert", "")
+        if "'" in alert:
+            pattern_names.append(alert.split("'")[1])
+    seen = set()
+    unique_patterns = [p for p in pattern_names if not (p in seen or seen.add(p))]
+
+    return jsonify({
+        "session_id": session_id,
+        "engine_name": engine_name,
+        "message_text": message_text,
+        "severity": side.get("severity"),
+        "patterns": unique_patterns,
+        "reported_at": time.time(),
+    }), 200
 
 
 @app.route("/api/datasets/upload", methods=["OPTIONS"])
@@ -496,6 +531,7 @@ def delete_dual_session(session_id):
 @app.route("/api/dual/reset/<session_id>", methods=["OPTIONS"])
 @app.route("/api/dual/sessions", methods=["OPTIONS"])
 @app.route("/api/dual/sessions/<session_id>", methods=["OPTIONS"])
+@app.route("/api/dual/report", methods=["OPTIONS"])
 def api_cors_preflight(dataset_id=None, session_id=None):
     return jsonify({}), 200
 

@@ -83,6 +83,13 @@
   .bubble.bot { align-self: flex-start; background: #fff; border-bottom-left-radius: 3px; }
   .bubble.bot.tier2 { background: #fff7df; border: 1px solid var(--tier2); color: #624b12; }
   .bubble.bot.tier3 { background: #fff0ee; border: 1px solid var(--tier3); color: #76221d; }
+  .bubble.bot.tier3.resolved { opacity: 0.7; }
+  .bubble-actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+  .bubble-actions .ack-btn { background: var(--blue); color: white; border: none; }
+  .bubble-actions .report-btn { background: transparent; border: 1px solid var(--tier3); color: var(--tier3); }
+  .bubble-actions button { padding: 6px 10px; border-radius: 6px; font-size: 12px; cursor: pointer; }
+  .resolved-tag { font-size: 11px; color: var(--muted); font-style: italic; }
+  .resolved-tag.reported { color: var(--tier3); font-style: normal; font-weight: 600; }
   .bubble.system { align-self: center; font-size: 11px; color: var(--muted); }
   .badge { font-size: 10px; padding: 2px 6px; border-radius: 4px; margin-left: 6px; }
   .badge.low { background: #223; color: var(--muted); }
@@ -223,6 +230,17 @@
   </div>
 </div>
 
+<div class="modal-overlay" id="reportModal">
+  <div class="modal" style="width: 460px;">
+    <span class="modal-close" onclick="closeReportModal()">✕</span>
+    <h2>🚩 Conversation Flagged</h2>
+    <div id="reportModalContent"></div>
+    <div class="row" style="margin-top: 18px; justify-content: flex-end;">
+      <button onclick="closeReportModal()">Close</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const SERVER = "http://localhost:5000";
 let sessionId = "session_" + Math.floor(Math.random() * 100000);
@@ -253,7 +271,7 @@ async function refreshDatasetsList() {
       <td>${ds.columns.join(", ")}</td>
       <td>
         <button onclick='openAnalyzeModal(${JSON.stringify(ds).replace(/'/g, "&apos;")})'>Analyze</button>
-        <button class="danger" onclick="deleteDataset('${ds.id}', '${String(ds.original_filename).replace(/'/g, "\\'")}')">Delete</button>
+        <button class="danger" onclick="deleteDataset('${ds.id}')">Delete</button>
       </td>`;
     tbody.appendChild(tr);
   });
@@ -276,15 +294,8 @@ async function uploadDataset() {
   }
 }
 
-async function deleteDataset(id, filename) {
-  if (!confirm(`Delete uploaded dataset "${filename}"? This cannot be undone.`)) return;
-  const resp = await fetch(SERVER + "/api/datasets/" + encodeURIComponent(id), { method: "DELETE" });
-  if (!resp.ok) {
-    const data = await resp.json().catch(() => ({}));
-    document.getElementById("uploadStatus").textContent = "Error: " + (data.error || "Could not delete dataset");
-    return;
-  }
-  document.getElementById("uploadStatus").textContent = `Deleted: ${filename}`;
+async function deleteDataset(id) {
+  await fetch(SERVER + "/api/datasets/" + id, { method: "DELETE" });
   refreshDatasetsList();
 }
 
@@ -513,6 +524,65 @@ function addBubble(panelId, text, cls) {
   div.textContent = text;
   document.getElementById(panelId).appendChild(div);
   div.scrollIntoView({ behavior: "smooth" });
+  return div;
+}
+
+function addTier3Bubble(panelId, text, sessionIdValue, engineName, messageText) {
+  const div = document.createElement("div");
+  div.className = "bubble bot tier3";
+  const textNode = document.createElement("div");
+  textNode.textContent = text;
+  div.appendChild(textNode);
+
+  const actions = document.createElement("div");
+  actions.className = "bubble-actions";
+  const ackBtn = document.createElement("button");
+  ackBtn.textContent = "I understand, continue";
+  ackBtn.className = "ack-btn";
+  const reportBtn = document.createElement("button");
+  reportBtn.textContent = "Report as phishing";
+  reportBtn.className = "report-btn";
+
+  ackBtn.onclick = () => {
+    actions.innerHTML = `<span class="resolved-tag">Acknowledged</span>`;
+    div.classList.add("resolved");
+  };
+  reportBtn.onclick = async () => {
+    const resp = await fetch(SERVER + "/api/dual/report", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sessionIdValue, engine_name: engineName, text: messageText }),
+    });
+    const data = await resp.json();
+    if (resp.ok) {
+      actions.innerHTML = `<span class="resolved-tag reported">✓ Reported — logged for review</span>`;
+      div.classList.add("resolved");
+      openReportModal(data);
+    }
+  };
+
+  actions.appendChild(ackBtn);
+  actions.appendChild(reportBtn);
+  div.appendChild(actions);
+  document.getElementById(panelId).appendChild(div);
+  div.scrollIntoView({ behavior: "smooth" });
+}
+
+function openReportModal(data) {
+  const patternsText = data.patterns.length ? data.patterns.join(", ") : "suspicious content";
+  document.getElementById("reportModalContent").innerHTML = `
+    <p>This conversation was flagged and has been logged for review.</p>
+    <table class="metrics-table">
+      <tr><td>Engine</td><td>${data.engine_name}</td></tr>
+      <tr><td>Severity</td><td>${(data.severity || "").toUpperCase()}</td></tr>
+      <tr><td>Flagged patterns</td><td>${patternsText}</td></tr>
+      <tr><td>Message</td><td>${data.message_text}</td></tr>
+    </table>`;
+  document.getElementById("reportModal").classList.add("open");
+}
+
+function closeReportModal() {
+  document.getElementById("reportModal").classList.remove("open");
 }
 
 function severityBadge(severity) {
@@ -556,8 +626,10 @@ async function sendDualMessage() {
   for (const engineName of ["baseline", "enhanced"]) {
     const side = data[engineName];
     const panelId = "messages-" + engineName;
-    if (side.reply_text) {
-      const tierClass = side.session_tier >= 3 ? "tier3" : side.session_tier === 2 ? "tier2" : "";
+    if (side.reply_text && side.session_tier >= 3) {
+      addTier3Bubble(panelId, side.reply_text, sessionId, engineName, text);
+    } else if (side.reply_text) {
+      const tierClass = side.session_tier === 2 ? "tier2" : "";
       addBubble(panelId, side.reply_text, "bot " + tierClass);
     } else if (side.detections.length > 0) {
       addBubble(panelId, `(flagged silently — Tier 1, severity: ${side.severity}, not shown to user)`, "system");
@@ -598,41 +670,24 @@ async function refreshSessionHistory() {
     const item = document.createElement("div");
     item.className = "history-item";
     item.innerHTML = `<div><strong>${session.session_id}</strong><small>${session.message_count} message${session.message_count === 1 ? "" : "s"} · ${formatSessionDate(session.updated_at)}</small></div>`;
-    const actions = document.createElement("div");
-    actions.className = "row";
-    const openButton = document.createElement("button");
-    openButton.textContent = "Open";
-    openButton.onclick = () => loadSession(session.session_id);
-    const deleteButton = document.createElement("button");
-    deleteButton.textContent = "Delete";
-    deleteButton.className = "danger";
-    deleteButton.onclick = () => deleteSession(session.session_id);
-    actions.append(openButton, deleteButton);
-    item.appendChild(actions);
+    const button = document.createElement("button");
+    button.textContent = "Open";
+    button.onclick = () => loadSession(session.session_id);
+    item.appendChild(button);
     list.appendChild(item);
   });
 }
 
-async function deleteSession(id) {
-  if (!confirm(`Delete conversation session "${id}"? This cannot be undone.`)) return;
-  const resp = await fetch(SERVER + "/api/dual/sessions/" + encodeURIComponent(id), { method: "DELETE" });
-  if (!resp.ok) {
-    document.getElementById("historyStatus").textContent = "Could not delete that session.";
-    return;
-  }
-  if (sessionId === id) {
-    sessionId = "session_" + Math.floor(Math.random() * 100000);
-    document.getElementById("sessionIdLabel").textContent = sessionId;
-    document.getElementById("messages-baseline").innerHTML = "";
-    document.getElementById("messages-enhanced").innerHTML = "";
-    liveResults = [];
-  }
-  refreshSessionHistory();
-}
-
-function renderStoredResult(panelId, result) {
-  if (result.reply_text) {
-    const tierClass = result.session_tier >= 3 ? "tier3" : result.session_tier === 2 ? "tier2" : "";
+function renderStoredResult(panelId, result, sessionIdValue, engineName, messageText) {
+  if (result.reply_text && result.session_tier >= 3) {
+    addTier3Bubble(panelId, result.reply_text, sessionIdValue, engineName, messageText);
+    if (result.user_reported) {
+      const last = document.getElementById(panelId).lastElementChild;
+      last.querySelector(".bubble-actions").innerHTML = `<span class="resolved-tag reported">✓ Reported — logged for review</span>`;
+      last.classList.add("resolved");
+    }
+  } else if (result.reply_text) {
+    const tierClass = result.session_tier === 2 ? "tier2" : "";
     addBubble(panelId, result.reply_text, "bot " + tierClass);
   } else if (result.detections.length > 0) {
     addBubble(panelId, `(flagged silently — Tier 1, severity: ${result.severity}, not shown to user)`, "system");
@@ -653,8 +708,8 @@ async function loadSession(id) {
   session.messages.forEach(message => {
     addBubble("messages-baseline", message.text, "user");
     addBubble("messages-enhanced", message.text, "user");
-    renderStoredResult("messages-baseline", message.results.baseline);
-    renderStoredResult("messages-enhanced", message.results.enhanced);
+    renderStoredResult("messages-baseline", message.results.baseline, sessionId, "baseline", message.text);
+    renderStoredResult("messages-enhanced", message.results.enhanced, sessionId, "enhanced", message.text);
     liveResults.push({
       text: message.text,
       baseline: message.results.baseline,

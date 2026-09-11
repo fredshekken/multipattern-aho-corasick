@@ -48,5 +48,19 @@
     ],
     "row_count": 2040,
     "uploaded_at": 1788884719.0163524
+  },
+  "3830e5e972a6": {
+    "id": "3830e5e972a6",
+    "original_filename": "SPAM_SMS.csv",
+    "stored_filename": "3830e5e972a6_SPAM_SMS.csv",
+    "columns": [
+      "masked_celphone_number",
+      "hashed_cellphone_number",
+      "date",
+      "text",
+      "carrier"
+    ],
+    "row_count": 1020,
+    "uploaded_at": 1789122128.5745435
   }
 }
