@@ -3,48 +3,57 @@
 <head>
 <meta charset="UTF-8">
 <title>Phishing Guard — Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
 <style>
   :root {
-    --bg: #eef4fb;
+    --bg: #f6f7fb;
     --panel: #ffffff;
-    --panel-alt: #f4f8fd;
-    --border: #d6e1ef;
-    --blue: #1769aa;
-    --blue-dark: #0d4775;
-    --blue-soft: #e2f0fc;
-    --text: #17324d;
-    --muted: #6e8298;
+    --panel-alt: #f8f9fc;
+    --border: #e5e7ef;
+    --blue: #5367d9;
+    --blue-dark: #24315f;
+    --blue-soft: #edf0ff;
+    --sidebar: #121f45;
+    --sidebar-muted: #aab4d1;
+    --text: #1d2742;
+    --muted: #68728b;
     --tier2: #f5a623;
     --tier3: #e6483f;
-    --green: #3fb27f;
+    --green: #1ca66a;
   }
   * { box-sizing: border-box; }
   body {
     margin: 0; background: var(--bg); color: var(--text);
-    font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+    font-family: "Nunito", sans-serif; font-weight: 400;
     display: flex; height: 100vh; overflow: hidden;
   }
   .sidebar {
-    width: 236px; background: var(--panel); border-right: 1px solid var(--border);
-    padding: 20px 0; flex-shrink: 0;
+    width: 248px; min-height: 100vh; background: var(--sidebar); color: white;
+    padding: 28px 14px; flex-shrink: 0;
   }
-  .sidebar h1 { font-size: 15px; padding: 0 20px 16px; margin: 0; border-bottom: 1px solid var(--border); }
+  .sidebar h1 { font-size: 18px; line-height: 1.15; padding: 0 14px 28px; margin: 0 0 18px; border-bottom: 1px solid rgba(255,255,255,.12); font-weight: 800; }
+  .sidebar h1 span { display: inline-block; margin-top: 6px; color: var(--sidebar-muted) !important; font-size: 13px; font-weight: 600 !important; }
   .nav-item {
-    padding: 12px 20px; cursor: pointer; color: var(--muted); font-size: 14px;
-    border-left: 3px solid transparent;
+    padding: 12px 14px; margin: 4px 0; border-radius: 8px; cursor: pointer;
+    color: var(--sidebar-muted); font-size: 14px; font-weight: 600;
+    border-left: 3px solid transparent; transition: background .15s ease, color .15s ease;
   }
-  .nav-item:hover { color: var(--text); background: var(--panel-alt); }
-  .nav-item.active { color: var(--blue-dark); border-left-color: var(--blue); background: var(--blue-soft); }
-  .nav-icon { display: inline-block; width: 18px; margin-right: 7px; color: var(--blue); font-size: 12px; }
-  .main { flex: 1; overflow-y: auto; padding: 28px 32px; }
+  .nav-item:hover { color: #fff; background: rgba(255,255,255,.08); }
+  .nav-item.active { color: #fff; border-left-color: #8190ff; background: rgba(83,103,217,.28); }
+  .nav-icon { display: inline-flex; width: 20px; margin-right: 8px; color: currentColor; vertical-align: -3px; }
+  .nav-item.active .nav-icon { color: #aeb8ff; }
+  .nav-icon svg, .button-icon svg { display: block; width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .main { flex: 1; overflow-y: auto; padding: 36px 42px; }
   .page { display: none; }
   .page.active { display: block; }
-  h2 { margin-top: 0; font-size: 20px; }
-  .subtitle { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
+  h2 { margin: 0; color: #17213d; font-size: 27px; line-height: 1.2; font-weight: 800; }
+  .subtitle { color: var(--muted); font-size: 14px; margin: 8px 0 26px; line-height: 1.5; }
 
   .card {
     background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
-    padding: 18px; margin-bottom: 18px;
+    padding: 22px; margin-bottom: 18px; box-shadow: 0 4px 14px rgba(29,39,66,.04);
   }
   .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   input[type=text], input[type=number], select {
@@ -53,17 +62,26 @@
   }
   button {
     background: var(--blue); color: white; border: none; border-radius: 6px;
-    padding: 8px 14px; font-size: 13px; cursor: pointer;
+    padding: 9px 14px; font: 600 13px "Nunito", sans-serif; cursor: pointer;
   }
-  button.secondary { background: #fff; color: var(--blue-dark); border: 1px solid #8fb7d9; }
+  button:hover { filter: brightness(.96); }
+  button.secondary { background: #fff; color: var(--blue); border: 1px solid var(--blue); }
   button.secondary:hover { background: var(--blue-soft); border-color: var(--blue); }
   button.new-conversation { font-weight: 600; margin-left: 8px; }
   button.danger { background: var(--tier3); }
   button:disabled { opacity: 0.5; cursor: not-allowed; }
 
   table { width: 100%; border-collapse: collapse; margin-top: 8px; }
-  th, td { text-align: left; padding: 8px 10px; font-size: 13px; border-bottom: 1px solid var(--border); }
-  th { color: var(--muted); font-weight: 600; }
+  th, td { text-align: left; padding: 12px 10px; font-size: 13px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 700; font-size: 11px; letter-spacing: .07em; text-transform: uppercase; }
+  tbody tr:nth-child(even) { background: #fafbfe; }
+  tbody tr:hover { background: #f0f3ff; }
+  td { color: #30394f; }
+  .button-icon { display: inline-flex; vertical-align: -3px; margin-right: 6px; }
+  .table-actions { display: flex; gap: 7px; align-items: center; }
+  .table-actions button, .history-item button { height: 36px; min-height: 36px; align-self: center; }
+  .table-scroll { overflow-x: auto; max-width: 100%; }
+  .table-scroll table { min-width: 640px; }
 
   /* Live Simulation */
   .dual-container { display: flex; gap: 16px; height: calc(100vh - 220px); min-height: 420px; }
@@ -161,17 +179,21 @@
   .tier-legend { margin-top: 18px; padding: 12px 14px; border-left: 3px solid var(--blue); background: var(--blue-soft); color: var(--muted); font-size: 12px; line-height: 1.6; }
   .tier-legend strong { color: var(--blue-dark); }
   .status-line { font-size: 11px; color: var(--muted); margin-top: 6px; }
-  .history-list { display: grid; gap: 8px; }
-  .history-item { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 13px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-alt); }
-  .history-item strong { display: block; color: var(--blue-dark); }
-  .history-item small { color: var(--muted); }
+  .history-list { display: grid; gap: 10px; }
+  .history-item { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 17px 18px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); box-shadow: 0 3px 10px rgba(29,39,66,.035); }
+  .history-item strong { display: block; color: var(--blue-dark); font-size: 14px; font-weight: 700; }
+  .history-item small { display: block; margin-top: 5px; color: var(--muted); font-size: 12px; }
   @media (max-width: 800px) {
     body { display: block; overflow: auto; }
-    .sidebar { width: 100%; border-right: 0; border-bottom: 1px solid var(--border); padding: 12px 0 0; }
+    .sidebar { width: 100%; min-height: 0; border-right: 0; border-bottom: 1px solid rgba(255,255,255,.12); padding: 12px 0 0; }
     .sidebar h1 { padding-bottom: 10px; }
     .nav-item { display: inline-block; padding: 10px 12px; border-left: 0; border-bottom: 3px solid transparent; }
     .nav-item.active { border-bottom-color: var(--blue); }
     .main { padding: 20px 14px; }
+    .subtitle button { margin-left: 0; margin-top: 8px; }
+    .history-item { align-items: center; }
+    .history-item button { flex: 0 0 auto; white-space: nowrap; }
+    .table-actions { align-items: center; }
     .dual-container { height: auto; min-height: 0; flex-direction: column; }
     .chat-panel { min-height: 360px; }
   }
@@ -181,9 +203,9 @@
 
 <div class="sidebar">
   <h1>Phishing Guard<br><span style="color:var(--muted); font-weight:400;">Dashboard</span></h1>
-  <div class="nav-item active" data-page="datasets"><span class="nav-icon">▦</span>Datasets</div>
-  <div class="nav-item" data-page="simulation"><span class="nav-icon">◌</span>Live Simulation</div>
-  <div class="nav-item" data-page="history"><span class="nav-icon">↺</span>Session History</div>
+  <div class="nav-item active" data-page="datasets"><span class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg></span>Datasets</div>
+  <div class="nav-item" data-page="simulation"><span class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H6l-3 2v-5.2A7.5 7.5 0 1 1 20 11.5Z"/><path d="M8 11h.01M12 11h.01M16 11h.01"/></svg></span>Live Simulation</div>
+  <div class="nav-item" data-page="history"><span class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5M12 7v5l3 2"/></svg></span>Session History</div>
 </div>
 
 <div class="main">
@@ -196,17 +218,19 @@
     <div class="card">
       <div class="row">
         <input type="file" id="fileInput" accept=".csv">
-        <button onclick="uploadDataset()">Upload</button>
-        <button class="secondary" onclick="openMetricsGuide()">Metrics</button>
+        <button onclick="uploadDataset()"><span class="button-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5M4 15v4h16v-4"/></svg></span>Upload</button>
+        <button class="secondary" onclick="openMetricsGuide()"><span class="button-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg></span>Metrics</button>
         <span class="status-line" id="uploadStatus"></span>
       </div>
     </div>
 
     <div class="card">
-      <table id="datasetsTable">
-        <thead><tr><th>Filename</th><th>Rows</th><th>Columns</th><th>Actions</th></tr></thead>
-        <tbody></tbody>
-      </table>
+      <div class="table-scroll">
+        <table id="datasetsTable">
+          <thead><tr><th>Filename</th><th>Rows</th><th>Columns</th><th>Actions</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
     </div>
   </div>
 
@@ -214,8 +238,8 @@
   <div class="page" id="page-simulation">
     <h2>Live Simulation</h2>
     <div class="subtitle">Same message, sent to both engines at once. Session: <code id="sessionIdLabel"></code>
-      <button class="secondary new-conversation" onclick="newSession()">New Conversation</button>
-      <button class="secondary" onclick="openLiveMetrics()">Metrics</button>
+      <button class="new-conversation" onclick="newSession()"><span class="button-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H6l-3 2v-5.2A7.5 7.5 0 1 1 20 11.5Z"/><path d="M12 8v7M8.5 11.5h7"/></svg></span>New Conversation</button>
+      <button class="secondary" onclick="openLiveMetrics()"><span class="button-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg></span>Metrics</button>
     </div>
 
     <div class="dual-container">
@@ -251,7 +275,7 @@
     <h2>Session History</h2>
     <div class="subtitle">Reopen previous live comparisons and continue the conversation.</div>
     <div class="card">
-      <div class="row"><button onclick="refreshSessionHistory()">Refresh history</button><span class="status-line" id="historyStatus"></span></div>
+      <div class="row"><button onclick="refreshSessionHistory()"><span class="button-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.8-4L3 9M3 4v5h5M4 13a8 8 0 0 0 14.8 4L21 15M21 20v-5h-5"/></svg></span>Refresh history</button><span class="status-line" id="historyStatus"></span></div>
     </div>
     <div class="card"><div class="history-list" id="historyList"><p class="status-line">No saved sessions yet.</p></div></div>
   </div>
@@ -307,10 +331,10 @@ async function refreshDatasetsList() {
       <td>${ds.original_filename}</td>
       <td>${ds.row_count}</td>
       <td>${ds.columns.join(", ")}</td>
-      <td>
-        <button onclick='openAnalyzeModal(${JSON.stringify(ds).replace(/'/g, "&apos;")})'>Analyze</button>
+      <td><div class="table-actions">
+        <button onclick='openAnalyzeModal(${JSON.stringify(ds).replace(/'/g, "&apos;")})'><span class="button-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 13v6H4V5h6"/></svg></span>Analyze</button>
         <button class="danger" onclick="deleteDataset('${ds.id}')">Delete</button>
-      </td>`;
+      </div></td>`;
     tbody.appendChild(tr);
   });
 }
@@ -333,8 +357,20 @@ async function uploadDataset() {
 }
 
 async function deleteDataset(id) {
-  await fetch(SERVER + "/api/datasets/" + id, { method: "DELETE" });
-  refreshDatasetsList();
+  const status = document.getElementById("uploadStatus");
+  status.textContent = "Deleting...";
+  try {
+    const resp = await fetch(SERVER + "/api/datasets/" + encodeURIComponent(id), { method: "DELETE" });
+    const data = await resp.json();
+    if (!resp.ok) {
+      status.textContent = "Delete failed: " + (data.error || "the server rejected the request");
+      return;
+    }
+    status.textContent = "Dataset deleted";
+    await refreshDatasetsList();
+  } catch (error) {
+    status.textContent = "Delete failed: server unavailable";
+  }
 }
 
 // ---------- Metrics modal ----------
@@ -753,7 +789,7 @@ async function refreshSessionHistory() {
     item.className = "history-item";
     item.innerHTML = `<div><strong>${session.session_id}</strong><small>${session.message_count} message${session.message_count === 1 ? "" : "s"} · ${formatSessionDate(session.updated_at)}</small></div>`;
     const button = document.createElement("button");
-    button.textContent = "Open";
+    button.innerHTML = '<span class="button-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13M13 6l6 6-6 6"/></svg></span>Open';
     button.onclick = () => loadSession(session.session_id);
     item.appendChild(button);
     list.appendChild(item);
