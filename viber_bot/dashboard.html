@@ -68,35 +68,63 @@
   /* Live Simulation */
   .dual-container { display: flex; gap: 16px; height: calc(100vh - 220px); min-height: 420px; }
   .chat-panel {
-    flex: 1; background: #dce8f3; border: 1px solid var(--border); border-radius: 10px;
+    flex: 1; background: #f8f8f9; border: 1px solid var(--border); border-radius: 10px;
     display: flex; flex-direction: column; overflow: hidden;
   }
   .chat-header {
-    padding: 13px 16px; background: #fff; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 14px;
-    display: flex; justify-content: space-between; align-items: center;
+    padding: 10px 14px; background: #fff; border-bottom: 1px solid #e2e2e4; font-size: 14px;
+    display: flex; align-items: center; gap: 10px;
   }
   .chat-header.baseline { border-top: 3px solid #6f8aa3; }
   .chat-header.enhanced { border-top: 3px solid var(--blue); }
-  .messages { flex: 1; overflow-y: auto; padding: 18px 14px; display: flex; flex-direction: column; gap: 8px; }
-  .bubble { max-width: 85%; padding: 9px 12px; border-radius: 12px; font-size: 13px; line-height: 1.4; white-space: pre-wrap; box-shadow: 0 1px 1px rgba(34, 69, 99, .08); }
-  .bubble.user { align-self: flex-end; background: #cce8ff; color: #143c5c; border-bottom-right-radius: 3px; }
-  .bubble.bot { align-self: flex-start; background: #fff; border-bottom-left-radius: 3px; }
-  .bubble.bot.tier2 { background: #fff7df; border: 1px solid var(--tier2); color: #624b12; }
-  .bubble.bot.tier3 { background: #fff0ee; border: 1px solid var(--tier3); color: #76221d; }
+  .avatar { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; color: white; font-size: 14px; font-weight: 700; flex-shrink: 0; }
+  .avatar.baseline { background: #6f8aa3; }
+  .avatar.enhanced { background: var(--blue); }
+  .header-copy { min-width: 0; line-height: 1.15; }
+  .header-title { display: block; color: #202124; font-weight: 700; }
+  .header-subtitle { display: block; margin-top: 3px; color: #8a8b91; font-size: 11px; font-weight: 400; }
+  .header-actions { display: flex; gap: 2px; margin-left: auto; }
+  .header-action { width: 28px; height: 28px; padding: 0; background: transparent; color: #55565b; border-radius: 50%; font-size: 16px; line-height: 1; }
+  .header-action:hover { background: #f0f0f2; color: #202124; }
+  .active-dot { width: 7px; height: 7px; margin-left: 2px; background: var(--green); border-radius: 50%; box-shadow: 0 0 0 3px #e5f6ee; }
+  .messages { flex: 1; overflow-y: auto; padding: 16px 14px; display: flex; flex-direction: column; gap: 10px; background-color: #f8f8f9; background-image: radial-gradient(#d9d9dc 0.7px, transparent 0.7px); background-size: 16px 16px; scrollbar-width: thin; scrollbar-color: #c4c4c8 transparent; }
+  .messages::-webkit-scrollbar { width: 5px; }
+  .messages::-webkit-scrollbar-thumb { background: #c4c4c8; border-radius: 999px; }
+  .message-group { display: flex; flex-direction: column; max-width: 85%; }
+  .message-group.user { align-self: flex-end; align-items: flex-end; }
+  .message-group.bot { position: relative; align-self: flex-start; align-items: flex-start; max-width: 75%; padding-left: 30px; }
+  .message-group.bot::before { content: "!"; position: absolute; left: 0; bottom: 17px; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; background: #71869a; color: white; font-size: 13px; font-weight: 700; }
+  .message-group.system { align-self: center; max-width: 90%; align-items: center; }
+  .bubble { padding: 9px 12px; border-radius: 13px; font-size: 13px; line-height: 1.4; white-space: pre-wrap; box-shadow: 0 1px 3px rgba(35, 35, 40, .08); }
+  .bubble.user { background: #7360f2; color: #fff; border-bottom-right-radius: 3px; }
+  .bubble.bot { background: #efeff0; color: #292a2e; border-bottom-left-radius: 3px; }
+  .bubble.bot.tier2 { background: #fff8e1; border-left: 2px solid #f0b429; color: #765313; }
+  .bubble.bot.tier3 { background: #fdecec; border-left: 2px solid #e5484d; color: #8f2f32; }
   .bubble.bot.tier3.resolved { opacity: 0.7; }
-  .bubble-actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
-  .bubble-actions .ack-btn { background: var(--blue); color: white; border: none; }
-  .bubble-actions .report-btn { background: transparent; border: 1px solid var(--tier3); color: var(--tier3); }
-  .bubble-actions button { padding: 6px 10px; border-radius: 6px; font-size: 12px; cursor: pointer; }
+  .sender-label { display: block; margin-bottom: 4px; font-size: 11px; font-weight: 700; }
+  .sender-label.baseline { color: #607b93; }
+  .sender-label.enhanced { color: var(--blue); }
+  .reply-quote { margin: 0 0 8px; padding: 5px 8px; border-left: 3px solid currentColor; background: rgba(255,255,255,.65); color: #73747a; font-size: 11px; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .reply-quote strong { color: inherit; }
+  .message-time { margin: 3px 4px 0; color: #71869a; font-size: 10px; line-height: 1; }
+  .message-group.user .message-time { text-align: right; }
+  .message-group.bot .message-time { margin-left: 0; }
+  .bubble-actions { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+  .bubble-actions .ack-btn, .bubble-actions .report-btn { color: white; border: none; padding: 5px 10px; border-radius: 999px; font-size: 11px; cursor: pointer; }
+  .bubble-actions .ack-btn { background: var(--blue); }
+  .bubble-actions .report-btn { background: var(--tier3); }
   .resolved-tag { font-size: 11px; color: var(--muted); font-style: italic; }
   .resolved-tag.reported { color: var(--tier3); font-style: normal; font-weight: 600; }
-  .bubble.system { align-self: center; font-size: 11px; color: var(--muted); }
+  .bubble.system { font-size: 11px; color: var(--muted); background: rgba(255,255,255,.48); box-shadow: none; padding: 3px 8px; }
   .badge { font-size: 10px; padding: 2px 6px; border-radius: 4px; margin-left: 6px; }
   .badge.low { background: #223; color: var(--muted); }
   .badge.moderate { background: #4a3a12; color: var(--tier2); }
   .badge.high, .badge.critical { background: #4a1e1a; color: var(--tier3); }
-  .composer { display: flex; gap: 8px; padding: 12px; background: #fff; border-top: 1px solid var(--border); }
-  .composer input { flex: 1; }
+  .composer { display: flex; align-items: center; gap: 7px; padding: 8px 10px; background: #fff; border-top: 1px solid #e2e2e4; }
+  .composer input { flex: 1; min-width: 0; border: 0; outline: 0; border-radius: 999px; padding: 9px 12px; background: #f3f3f5; color: #292a2e; }
+  .composer input::placeholder { color: #999aa0; }
+  .composer button.send-button { width: 38px; height: 38px; padding: 0; border-radius: 50%; font-size: 0; display: grid; place-items: center; background: #7360f2; }
+  .composer button.send-button::after { content: "➤"; display: block; color: #fff; font-size: 16px; line-height: 1; transform: translateY(-1px); }
 
   /* Modal */
   .modal-overlay {
@@ -192,18 +220,28 @@
 
     <div class="dual-container">
       <div class="chat-panel">
-        <div class="chat-header baseline">Original</div>
+        <div class="chat-header baseline">
+          <span class="avatar baseline">O</span>
+          <span class="header-copy"><span class="header-title">Original Aho-Corasick</span><span class="header-subtitle">AI Detection · Aho-Corasick</span></span>
+          <span class="active-dot" aria-label="Active"></span>
+          <span class="header-actions"><button class="header-action" type="button" aria-label="Search messages">⌕</button><button class="header-action" type="button" aria-label="Engine information">ⓘ</button></span>
+        </div>
         <div class="messages" id="messages-baseline"></div>
       </div>
       <div class="chat-panel">
-        <div class="chat-header enhanced">Enhanced</div>
+        <div class="chat-header enhanced">
+          <span class="avatar enhanced">E</span>
+          <span class="header-copy"><span class="header-title">Enhanced Aho-Corasick</span><span class="header-subtitle">AI Detection · Aho-Corasick</span></span>
+          <span class="active-dot" aria-label="Active"></span>
+          <span class="header-actions"><button class="header-action" type="button" aria-label="Search messages">⌕</button><button class="header-action" type="button" aria-label="Engine information">ⓘ</button></span>
+        </div>
         <div class="messages" id="messages-enhanced"></div>
       </div>
     </div>
     <div class="composer">
       <input type="text" id="dualInput" placeholder="Type a message — sent to both engines..."
              onkeydown="if(event.key==='Enter') sendDualMessage()">
-      <button onclick="sendDualMessage()">Send</button>
+      <button class="send-button" onclick="sendDualMessage()" aria-label="Send message">Send</button>
     </div>
     <div class="status-line" id="dualStatus"></div>
   </div>
@@ -518,21 +556,61 @@ function openLiveMetrics() {
 // ---------- Live Simulation tab ----------
 document.getElementById("sessionIdLabel").textContent = sessionId;
 
-function addBubble(panelId, text, cls) {
+function engineMeta(panelId) {
+  return panelId.includes("enhanced")
+    ? { name: "Enhanced Aho-Corasick", className: "enhanced" }
+    : { name: "Original Aho-Corasick", className: "baseline" };
+}
+
+function appendBotContent(div, panelId, text, quotedText) {
+  const meta = engineMeta(panelId);
+  const label = document.createElement("span");
+  label.className = "sender-label " + meta.className;
+  label.textContent = meta.name;
+  div.appendChild(label);
+  if (quotedText) {
+    const quote = document.createElement("div");
+    quote.className = "reply-quote";
+    quote.innerHTML = `<strong>You</strong> · ${escapeHtml(quotedText)}`;
+    div.appendChild(quote);
+  }
+  const textNode = document.createElement("div");
+  textNode.textContent = text;
+  div.appendChild(textNode);
+}
+
+function currentMessageTime() {
+  return new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+function appendMessageTime(group) {
+  const time = document.createElement("span");
+  time.className = "message-time";
+  time.textContent = currentMessageTime();
+  group.appendChild(time);
+}
+
+function addBubble(panelId, text, cls, quotedText = "") {
   const div = document.createElement("div");
   div.className = "bubble " + cls;
-  div.textContent = text;
-  document.getElementById(panelId).appendChild(div);
-  div.scrollIntoView({ behavior: "smooth" });
+  if (cls.includes("bot")) {
+    appendBotContent(div, panelId, text, quotedText);
+  } else {
+    div.textContent = text;
+  }
+  const group = document.createElement("div");
+  group.className = "message-group " + (cls.includes("user") ? "user" : cls.includes("bot") ? "bot" : "system");
+  group.appendChild(div);
+  appendMessageTime(group);
+  document.getElementById(panelId).appendChild(group);
+  group.scrollIntoView({ behavior: "smooth" });
   return div;
 }
 
 function addTier3Bubble(panelId, text, sessionIdValue, engineName, messageText) {
   const div = document.createElement("div");
   div.className = "bubble bot tier3";
-  const textNode = document.createElement("div");
-  textNode.textContent = text;
-  div.appendChild(textNode);
+  appendBotContent(div, panelId, text, messageText);
 
   const actions = document.createElement("div");
   actions.className = "bubble-actions";
@@ -564,8 +642,12 @@ function addTier3Bubble(panelId, text, sessionIdValue, engineName, messageText) 
   actions.appendChild(ackBtn);
   actions.appendChild(reportBtn);
   div.appendChild(actions);
-  document.getElementById(panelId).appendChild(div);
-  div.scrollIntoView({ behavior: "smooth" });
+  const group = document.createElement("div");
+  group.className = "message-group bot";
+  group.appendChild(div);
+  appendMessageTime(group);
+  document.getElementById(panelId).appendChild(group);
+  group.scrollIntoView({ behavior: "smooth" });
 }
 
 function openReportModal(data) {
@@ -630,7 +712,7 @@ async function sendDualMessage() {
       addTier3Bubble(panelId, side.reply_text, sessionId, engineName, text);
     } else if (side.reply_text) {
       const tierClass = side.session_tier === 2 ? "tier2" : "";
-      addBubble(panelId, side.reply_text, "bot " + tierClass);
+      addBubble(panelId, side.reply_text, "bot " + tierClass, text);
     } else if (side.detections.length > 0) {
       addBubble(panelId, `(flagged silently — Tier 1, severity: ${side.severity}, not shown to user)`, "system");
     } else {
@@ -682,13 +764,13 @@ function renderStoredResult(panelId, result, sessionIdValue, engineName, message
   if (result.reply_text && result.session_tier >= 3) {
     addTier3Bubble(panelId, result.reply_text, sessionIdValue, engineName, messageText);
     if (result.user_reported) {
-      const last = document.getElementById(panelId).lastElementChild;
+      const last = document.getElementById(panelId).lastElementChild.querySelector(".bubble");
       last.querySelector(".bubble-actions").innerHTML = `<span class="resolved-tag reported">✓ Reported — logged for review</span>`;
       last.classList.add("resolved");
     }
   } else if (result.reply_text) {
     const tierClass = result.session_tier === 2 ? "tier2" : "";
-    addBubble(panelId, result.reply_text, "bot " + tierClass);
+    addBubble(panelId, result.reply_text, "bot " + tierClass, messageText);
   } else if (result.detections.length > 0) {
     addBubble(panelId, `(flagged silently — Tier 1, severity: ${result.severity}, not shown to user)`, "system");
   } else {
