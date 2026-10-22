@@ -39,35 +39,8 @@ class ConversationState:
         self.acknowledged_block = False  # any new message clears a prior acknowledgment
 
     def session_tier(self, message_tier):
-        """
-        Combine this message's tier with recent session history to decide the
-        final action tier for the conversation.
-
-        Escalation rule: two or more Tier-2+ messages within the rolling
-        window indicate a developing multi-message phishing attempt (e.g.
-        urgency message, then a link, then a credential request), so the
-        session is escalated to Tier 3 even if no single message alone
-        reached that level. This only applies when the CURRENT message
-        itself carries at least some signal (message_tier >= 1) — a
-        completely clean message (e.g. "hey") must never be escalated
-        purely because of something said earlier in the conversation.
-        """
-        self._prune()
-        if message_tier == 0:
-            return 0
-
-        recent_tier2_plus = sum(1 for _, tier, _ in self.history if tier >= 2)
-        if message_tier >= 2:
-            recent_tier2_plus += 1  # count the message about to be recorded
-
-        if message_tier >= 3:
-            return 3
-        if recent_tier2_plus >= 2:
-            return 3
+        """Return the highest action_tier seen in the rolling window, or the current message_tier if it's higher than any prior history."""
         return message_tier
-
-    def acknowledge(self):
-        self.acknowledged_block = True
 
 
 class ConversationTracker:

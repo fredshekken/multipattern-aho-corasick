@@ -22,14 +22,14 @@ const BACKEND_URL = "http://127.0.0.1:8000/scan";
 const FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
 const UI_CLASS = "phish-shield-ui";
 
-// Plain-language reasons for each evidence group
+// Plain-language reasons for each evidence group (formatted as indicator chips)
 const REASONS = {
-  brand_entity: "mentions a known brand or bank",
-  credential_payment: "involves account, password, or payment details",
-  action_request: "asks you to take an action",
-  urgency_threat: "uses urgent or threatening wording",
-  url_risk: "contains a risky link",
-  obfuscation: "uses disguised or misspelled words"
+  brand_entity: "Financial or brand mention",
+  credential_payment: "Account or credential prompt",
+  action_request: "Action requested",
+  urgency_threat: "Urgent or threatening language",
+  url_risk: "Suspicious link detected",
+  obfuscation: "Obfuscated / disguised keywords"
 };
 
 // Matches sandbox and exact Telegram Web A structure
@@ -148,6 +148,7 @@ function injectMarker(node, data) {
 }
 
 // One short line, click to expand the reason
+// One short line, click to expand the reason
 function injectCollapsed(node, data) {
   const { tokenList, riskValue } = detailText(data);
 
@@ -163,7 +164,7 @@ function injectCollapsed(node, data) {
   `;
 
   const header = document.createElement("div");
-  header.textContent = "⚠️ Review this message ▾";
+  header.textContent = "⚠️ Caution: Review this message ▾";
   header.style.cssText = `
     display: inline-block;
     padding: 2px 8px;
@@ -176,22 +177,28 @@ function injectCollapsed(node, data) {
   `;
 
   const details = document.createElement("div");
-  details.textContent = `This message ${reasonText(data)}.`;
+  details.innerHTML = `
+    <div style="font-weight: 500;">Unverified request detected. Please verify the sender before taking action.</div>
+    <div style="margin-top: 3px; font-size: 10px; opacity: 0.9;">
+      <strong>Flagged indicators:</strong> ${reasonText(data).split(", ").join(" • ")}
+    </div>
+  `;
   details.title = `Matched: ${tokenList} [Risk: ${riskValue}]`;
   details.style.cssText = `
     display: none;
     margin-top: 3px;
-    padding: 4px 8px;
+    padding: 6px 10px;
     border-radius: 4px;
     word-break: break-word;
     background-color: #fffbeb;
     color: #92400e;
+    border-left: 3px solid #d97706;
   `;
 
   header.addEventListener("click", () => {
     const open = details.style.display === "block";
     details.style.display = open ? "none" : "block";
-    header.textContent = open ? "⚠️ Review this message ▾" : "⚠️ Review this message ▴";
+    header.textContent = open ? "⚠️ Caution: Review this message ▾" : "⚠️ Caution: Review this message ▴";
   });
 
   wrap.appendChild(header);
@@ -200,19 +207,25 @@ function injectCollapsed(node, data) {
 }
 
 // Full banner. Red for Tier 3, amber for anything lower that is set to "banner".
+// Full banner. Red for Tier 3, amber for anything lower that is set to "banner".
 function injectBanner(node, data) {
   const { tokenList, riskValue } = detailText(data);
   const isActive = data.tier >= 3;
   const isCritical = data.severity === "critical";
-  const why = reasonText(data);
+  const indicators = reasonText(data).split(", ").join(" • ");
 
-  let label;
+  let headerTitle;
+  let actionText;
+
   if (!isActive) {
-    label = `⚠️ Possible phishing: this message ${why}.`;
+    headerTitle = "⚠️ Caution: Potential Phishing Risk";
+    actionText = "Unverified patterns detected. Verify the sender's identity before interacting.";
   } else if (isCritical) {
-    label = `🚨 Phishing detected: do not click or reply. This message ${why}.`;
+    headerTitle = "🚨 Phishing Alert: Do not click or reply";
+    actionText = "High risk detected. This message attempts to direct you to an unverified external destination or collect credentials.";
   } else {
-    label = `🚨 Likely phishing: verify the sender first. This message ${why}.`;
+    headerTitle = "🚨 Likely Phishing: Verify Sender";
+    actionText = "Suspicious communication detected. Avoid clicking unverified links or downloading attachments.";
   }
 
   const banner = document.createElement("div");
@@ -227,7 +240,6 @@ function injectBanner(node, data) {
     border-radius: 6px;
     font-size: 11px;
     font-family: ${FONT};
-    font-weight: 600;
     line-height: 1.4;
     z-index: 10;
     word-break: break-word;
@@ -237,7 +249,14 @@ function injectBanner(node, data) {
     color: ${isActive ? "#991b1b" : "#92400e"};
     border-left: 4px solid ${isActive ? "#dc2626" : "#d97706"};
   `;
-  banner.textContent = label;
+
+  banner.innerHTML = `
+    <div style="font-weight: 700; font-size: 11.5px;">${headerTitle}</div>
+    <div style="font-weight: 500; margin-top: 2px;">${actionText}</div>
+    <div style="margin-top: 4px; font-size: 10px; opacity: 0.9;">
+      <strong>Risk factors:</strong> ${indicators}
+    </div>
+  `;
 
   node.parentNode.insertBefore(banner, node);
 }
