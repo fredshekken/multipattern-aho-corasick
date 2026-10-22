@@ -32,16 +32,69 @@ const REASONS = {
   obfuscation: "Obfuscated / disguised keywords"
 };
 
-// Matches sandbox and exact Telegram Web A structure
-const SELECTOR = [
+// ---------------------------------------------------------------------------
+// SITE SETTINGS
+// ---------------------------------------------------------------------------
+const IS_FB = /(^|\.)facebook\.com$|(^|\.)messenger\.com$/.test(location.hostname);
+
+// Telegram Web A structure (and the local test page)
+const TELEGRAM_SELECTOR = [
   ".chat-text",
   ".message-content",
   ".message-content-wrapper .text",
   "div.text[dir='auto']"
 ].join(", ");
 
+// Messenger / Facebook Messages: class names are random and change often,
+// so we use the stable part: text blocks with dir="auto".
+const FB_SELECTOR = "div[dir='auto']";
+const FB_SKIP = 'a, [role="navigation"], [role="banner"], [role="complementary"], [role="textbox"], [contenteditable="true"]';
+
+const SELECTOR = IS_FB ? FB_SELECTOR : TELEGRAM_SELECTOR;
+
+// On Messenger, skip the message box, sidebar previews, and link cards.
+function shouldSkip(node) {
+  if (!IS_FB) return false;
+  if (node.isContentEditable) return true;
+  return !!node.closest(FB_SKIP);
+}
+
+// ---------------------------------------------------------------------------
+// BACKEND CALL
+// Try directly first. If the page blocks it (for example by its security
+// policy), fall back to the extension's background script (background.js).
+// ---------------------------------------------------------------------------
+async function scanText(text) {
+  try {
+    const res = await fetch(BACKEND_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: text })
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
+      return await new Promise((resolve, reject) => {
+        chrome.runtime.sendMessage({ type: "phishshield-scan", text: text }, (resp) => {
+          if (chrome.runtime.lastError || !resp || !resp.ok) {
+            reject(new Error(
+              (chrome.runtime.lastError && chrome.runtime.lastError.message) ||
+              (resp && resp.error) || "background scan failed"
+            ));
+          } else {
+            resolve(resp.data);
+          }
+        });
+      });
+    }
+    throw err;
+  }
+}
+
 async function inspectBubble(node) {
-  if (!node || node.dataset.phishScanned) return;
+  if (!node || !node.dataset || node.dataset.phishScanned) return;
+  if (shouldSkip(node)) return;
 
   // Selectors can match nested elements of the same message.
   // Skip if an ancestor or descendant was already scanned, to avoid duplicates.
@@ -64,18 +117,7 @@ async function inspectBubble(node) {
   node.dataset.phishScanned = "true";
 
   try {
-    const res = await fetch(BACKEND_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: text })
-    });
-
-    if (!res.ok) {
-      console.warn(`[PhishShield] HTTP ${res.status}: Backend returned an error.`);
-      return;
-    }
-
-    const data = await res.json();
+    const data = await scanText(text);
     renderResult(node, data);
   } catch (err) {
     console.error("[PhishShield] Backend scan error:", err);
@@ -148,7 +190,6 @@ function injectMarker(node, data) {
 }
 
 // One short line, click to expand the reason
-// One short line, click to expand the reason
 function injectCollapsed(node, data) {
   const { tokenList, riskValue } = detailText(data);
 
@@ -206,7 +247,6 @@ function injectCollapsed(node, data) {
   node.parentNode.insertBefore(wrap, node);
 }
 
-// Full banner. Red for Tier 3, amber for anything lower that is set to "banner".
 // Full banner. Red for Tier 3, amber for anything lower that is set to "banner".
 function injectBanner(node, data) {
   const { tokenList, riskValue } = detailText(data);

@@ -1,12 +1,21 @@
 {
   "name": "Endpoint Phishing Shield Test",
-  "version": "1.0",
+  "version": "1.1",
   "manifest_version": 3,
   "permissions": [],
   "host_permissions": ["http://127.0.0.1:8000/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
   "content_scripts": [
     {
-      "matches": ["*://*/*test_chat.html*", "file:///*test_chat.html*","https://web.telegram.org/*"],
+      "matches": [
+        "*://*/*test_chat.html*",
+        "file:///*test_chat.html*",
+        "https://web.telegram.org/*",
+        "https://www.facebook.com/messages/*",
+        "https://www.messenger.com/*"
+      ],
       "js": ["content.js"],
       "run_at": "document_idle"
     }
