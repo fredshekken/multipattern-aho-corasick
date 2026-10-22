@@ -1,7 +1,7 @@
 console.log("[PhishShield] Endpoint listener active...");
 
 // ---------------------------------------------------------------------------
-// DISPLAY POLICY (edit this to change how each tier is shown)
+// DISPLAY POLICY (edit this block to change what users see)
 //   "none"      : nothing shown in the chat (message is only logged in the console)
 //   "marker"    : tiny gray marker, details on hover
 //   "collapsed" : one short amber line, click to see why
@@ -13,9 +13,24 @@ const TIER_DISPLAY = {
   3: "banner"      // High / Critical: full red warning
 };
 
+// A Tier 2 message is only shown if at least this many different kinds of
+// evidence were found. Below that, it stays silent (still logged in the console).
+// Set to 1 to show every Tier 2 message.
+const TIER2_MIN_EVIDENCE = 2;
+
 const BACKEND_URL = "http://127.0.0.1:8000/scan";
 const FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
 const UI_CLASS = "phish-shield-ui";
+
+// Plain-language reasons for each evidence group
+const REASONS = {
+  brand_entity: "mentions a known brand or bank",
+  credential_payment: "involves account, password, or payment details",
+  action_request: "asks you to take an action",
+  urgency_threat: "uses urgent or threatening wording",
+  url_risk: "contains a risky link",
+  obfuscation: "uses disguised or misspelled words"
+};
 
 // Matches sandbox and exact Telegram Web A structure
 const SELECTOR = [
@@ -67,14 +82,38 @@ async function inspectBubble(node) {
   }
 }
 
+function evidenceCount(data) {
+  // If an older backend does not send evidence groups, do not hide anything.
+  return Array.isArray(data.evidence_groups) ? data.evidence_groups.length : Infinity;
+}
+
+function reasonText(data) {
+  const groups = Array.isArray(data.evidence_groups) ? data.evidence_groups : [];
+  const reasons = groups.map((g) => REASONS[g]).filter(Boolean);
+  if (reasons.length === 0) return "contains wording often used in phishing";
+  return reasons.join(", ");
+}
+
+function detailText(data) {
+  const tokenList = (data.tokens && data.tokens.length > 0) ? data.tokens.join(", ") : "Pattern detected";
+  const riskValue = data.risk_score !== undefined ? Number(data.risk_score).toFixed(3) : "N/A";
+  return { tokenList, riskValue };
+}
+
 function renderResult(node, data) {
   if (!data || data.tier < 1) return;
 
-  const mode = TIER_DISPLAY[data.tier] || "none";
-  const { tokenList, riskValue } = detailText(data);
+  let mode = TIER_DISPLAY[data.tier] || "none";
+  if (data.tier === 2 && evidenceCount(data) < TIER2_MIN_EVIDENCE) {
+    mode = "none";
+  }
 
   if (mode === "none") {
-    console.debug(`[PhishShield] Tier ${data.tier} recorded (not shown): ${tokenList} [Risk: ${riskValue}]`);
+    const { tokenList, riskValue } = detailText(data);
+    console.debug(
+      `[PhishShield] Tier ${data.tier} recorded, not shown: ${tokenList} ` +
+      `[Risk: ${riskValue}] [Evidence: ${(data.evidence_groups || []).join(", ") || "n/a"}]`
+    );
     return;
   }
 
@@ -89,19 +128,13 @@ function renderResult(node, data) {
   else if (mode === "banner") injectBanner(node, data);
 }
 
-function detailText(data) {
-  const tokenList = (data.tokens && data.tokens.length > 0) ? data.tokens.join(", ") : "Pattern detected";
-  const riskValue = data.risk_score !== undefined ? Number(data.risk_score).toFixed(3) : "N/A";
-  return { tokenList, riskValue };
-}
-
 // Tiny gray marker, details on hover
 function injectMarker(node, data) {
   const { tokenList, riskValue } = detailText(data);
   const dot = document.createElement("span");
   dot.className = UI_CLASS;
   dot.textContent = "ⓘ";
-  dot.title = `PhishShield: ${tokenList} [Risk: ${riskValue}]`;
+  dot.title = `PhishShield: ${reasonText(data)} (${tokenList}) [Risk: ${riskValue}]`;
   dot.style.cssText = `
     display: inline-block;
     margin-left: 6px;
@@ -143,7 +176,8 @@ function injectCollapsed(node, data) {
   `;
 
   const details = document.createElement("div");
-  details.textContent = `Flagged words: ${tokenList} [Risk: ${riskValue}]`;
+  details.textContent = `This message ${reasonText(data)}.`;
+  details.title = `Matched: ${tokenList} [Risk: ${riskValue}]`;
   details.style.cssText = `
     display: none;
     margin-top: 3px;
@@ -170,18 +204,20 @@ function injectBanner(node, data) {
   const { tokenList, riskValue } = detailText(data);
   const isActive = data.tier >= 3;
   const isCritical = data.severity === "critical";
+  const why = reasonText(data);
 
   let label;
   if (!isActive) {
-    label = `⚠️ Possible phishing: be careful with links and requests (${tokenList})`;
+    label = `⚠️ Possible phishing: this message ${why}.`;
   } else if (isCritical) {
-    label = `🚨 Phishing detected: do not click or reply (${tokenList}) [Risk: ${riskValue}]`;
+    label = `🚨 Phishing detected: do not click or reply. This message ${why}.`;
   } else {
-    label = `🚨 Likely phishing: verify the sender first (${tokenList}) [Risk: ${riskValue}]`;
+    label = `🚨 Likely phishing: verify the sender first. This message ${why}.`;
   }
 
   const banner = document.createElement("div");
   banner.className = UI_CLASS;
+  banner.title = `Matched: ${tokenList} [Risk: ${riskValue}]`;
   banner.style.cssText = `
     display: block;
     box-sizing: border-box;
