@@ -14,7 +14,8 @@ class EnhancedAhoCorasick:
     """
 
     def __init__(self, patterns, max_errors=1, anomaly_threshold=0.45,
-                 exact_threshold=1.2, fuzzy_threshold=1.2, affix_threshold=1.05):
+                 exact_threshold=1.2, fuzzy_threshold=1.2, affix_threshold=1.05,
+                 warning_threshold=1.142, min_evidence=0):
         """
         WHERE IT ENTERS THE ALGO:
         This is the constructor. It runs once when the engine starts.
@@ -32,6 +33,14 @@ class EnhancedAhoCorasick:
         self.exact_threshold = exact_threshold
         self.fuzzy_threshold = fuzzy_threshold
         self.affix_threshold = affix_threshold
+
+        # Alert Validation / Warning Gate (add-on layer AFTER the Global Risk Score).
+        # A visible warning (Tier 2/3) needs S >= warning_threshold (theta_W) AND
+        # C >= min_evidence (c_min) independent evidence groups. Otherwise the
+        # message is capped at Tier 1 (passive). min_evidence=0 disables the gate,
+        # so the default behaves exactly like the pre-gate engine.
+        self.warning_threshold = warning_threshold
+        self.min_evidence = min_evidence
 
         # Parse and flatten the incoming dictionary into a single pattern list
         self.pattern_groups = self._normalize_pattern_groups(patterns)
@@ -124,8 +133,12 @@ class EnhancedAhoCorasick:
             # English
             "official", "help", "customer", "support", "hotline",
             "representative", "authorized", "service", "policy",
-            # Taglish
-            "opisyal", "tulong", "serbisyo", "awtorisado", "lehitimo"
+            "advisory", "reminder", "notice", "maintenance", "legitimate",
+            "transaction", "ignore", "never",
+            # Taglish / Filipino
+            "opisyal", "tulong", "serbisyo", "awtorisado", "lehitimo",
+            "paalala", "babala", "abiso", "huwag", "wag", "pansin",
+            "ingat", "transaksyon"
         ]
 
         # Dictionary-independent terms used strictly by Layer 5 (Fallback Anomaly Scorer)
@@ -218,7 +231,8 @@ class EnhancedAhoCorasick:
 
     @classmethod
     def from_pattern_file(cls, pattern_file, max_errors=1, anomaly_threshold=0.45,
-                           exact_threshold=1.2, fuzzy_threshold=1.2, affix_threshold=1.05):
+                           exact_threshold=1.2, fuzzy_threshold=1.2, affix_threshold=1.05,
+                           warning_threshold=1.142, min_evidence=0):
         """
         WHERE IT ENTERS:
         Alternative factory constructor used by server.py to instantiate the engine
@@ -233,7 +247,8 @@ class EnhancedAhoCorasick:
 
         return cls(patterns, max_errors=max_errors, anomaly_threshold=anomaly_threshold,
                    exact_threshold=exact_threshold, fuzzy_threshold=fuzzy_threshold,
-                   affix_threshold=affix_threshold)
+                   affix_threshold=affix_threshold,
+                   warning_threshold=warning_threshold, min_evidence=min_evidence)
 
     def _normalize_pattern_groups(self, patterns):
         """Deduplicates and cleans keyword strings across pattern categories."""
@@ -470,13 +485,13 @@ class EnhancedAhoCorasick:
                 proximity_delta += 1 / (distance + 1)
                 pos = context.find(term, pos + 1)
 
-        # Subtract weight for neutralizer terms (closer terms subtract more risk)
+        # Subtract weight for neutralizer terms (scaled by dampening coefficient beta=2.5)
         for term in self.neutralizers:
             pos = context.find(term)
             while pos != -1:
                 abs_pos = context_start + pos
                 distance = abs(abs_pos - match_index)
-                proximity_delta -= 1 / (distance + 1)
+                proximity_delta -= 2.5 / (distance + 1)
                 pos = context.find(term, pos + 1)
 
         # Clamp between -1.0 and +1.0 so repetitive words don't overpower the score
@@ -856,10 +871,14 @@ class EnhancedAhoCorasick:
         # Layer 2: Bitap Fuzzy Search (Residual Leetspeak / Typos)
         # ---------------------------------------------------------------------
         for j, (pattern, norm_pattern) in enumerate(zip(self.patterns, self.norm_patterns)):
+            # LENGTH THRESHOLD GUARD:
+            # Short keywords (<= 4 chars like 'maya') must not use Bitap fuzzy matching
+            # to prevent high-frequency collisions with Tagalog words (e.g., 'kaya' -> 'maya')
+            if len(norm_pattern) < 5:
+                continue
+
             bitap_matches = self._bitap_search(clean_text, norm_pattern, self.max_errors)
             for (end_idx, error_count) in bitap_matches:
-                if error_count == 0:
-                    continue  # Already caught by Layer 1 exact trie match
 
                 start_idx = end_idx - len(norm_pattern) + 1
                 if not self._is_word_bounded(clean_text, start_idx, end_idx):
@@ -984,34 +1003,134 @@ class EnhancedAhoCorasick:
     MODERATE_HIGH_CUTOFF = 1.5    # Requires corroborating context or risky URL placement
     HIGH_CRITICAL_CUTOFF = 2.5    # Hard block: Brand spoofing in URL or strong threat clustering
 
+    # -------------------------------------------------------------------------
+    # ALERT VALIDATION / WARNING GATE (add-on, runs after Global Risk Score)
+    # Flow: Detection -> Risk Score -> Global Risk -> Evidence Check -> Warning
+    # Detection != automatic visible warning.
+    #
+    # C = sum over groups g of I(g), I(g) = 1 if group g is present else 0
+    # Visible warning only if S >= theta_W AND C >= c_min
+    # Individual Detection Risk and Global Risk (S = max R_i) are NOT modified.
+    # -------------------------------------------------------------------------
+    EVIDENCE_GROUPS = (
+        "brand_entity", "credential_payment", "action_request",
+        "urgency_threat", "url_risk", "obfuscation",
+    )
+
+    # dictionary category -> evidence group
+    CATEGORY_TO_GROUP = {
+        "brand_terms": "brand_entity",
+        "financial_terms": "credential_payment",
+        "action_terms": "action_request",
+        "security_and_status_terms": "urgency_threat",
+        "social_engineering_terms": "urgency_threat",
+    }
+
+    # anomaly-layer signal label -> evidence group
+    ANOMALY_SIGNAL_TO_GROUP = {
+        "urgency language": "urgency_threat",
+        "action request": "action_request",
+        "credential or payment language": "credential_payment",
+        "obfuscated spelling": "obfuscation",
+    }
+
+    # URL segments that count as risky. 'sld' (brand owns the registered domain)
+    # and 'none' do NOT count, so an exact trusted-looking domain adds no evidence.
+    RISKY_URL_SEGMENTS = {"shortener", "subdomain", "path", "query"}
+
+    def _evidence_groups(self, text, detections):
+        """Returns the set of independent evidence groups present in the message."""
+        pattern_to_group = {}
+        for category, group_patterns in self.pattern_groups.items():
+            group = self.CATEGORY_TO_GROUP.get(category)
+            if group:
+                for pattern in group_patterns:
+                    pattern_to_group[pattern] = group
+
+        present = set()
+        for item in detections:
+            breakdown = item.get("score_breakdown", {})
+            pattern = breakdown.get("pattern")
+            if pattern in pattern_to_group:
+                present.add(pattern_to_group[pattern])
+            for signal in item.get("signals", []):
+                group = self.ANOMALY_SIGNAL_TO_GROUP.get(signal)
+                if group:
+                    present.add(group)
+            if item.get("match_type") == "fuzzy":
+                present.add("obfuscation")
+            if breakdown.get("url_segment") in self.RISKY_URL_SEGMENTS:
+                present.add("url_risk")
+
+        # Obfuscated tokens in the raw text (e.g. "c@sh", "p4ssw0rd")
+        if re.search(r'\b[a-z]+[0-9@$]+[a-z]+\b', text.lower()):
+            present.add("obfuscation")
+        if self._analyze_url(text, 0)["segment"] in self.RISKY_URL_SEGMENTS:
+            present.add("url_risk")
+        return present
+
+    @staticmethod
+    def _tier_from_risk(max_risk, has_detections, low_moderate, moderate_high, high_critical):
+        if not has_detections:
+            return "none", 0
+        if max_risk >= high_critical:
+            return "critical", 3
+        if max_risk >= moderate_high:
+            return "high", 3
+        if max_risk >= low_moderate:
+            return "moderate", 2
+        return "low", 1
+
+    def apply_warning_gate(self, assessment, warning_threshold=None, min_evidence=None):
+        """
+        Pure function over an existing assessment (no rescanning), so threshold
+        sweeps only need ONE enhanced_search per message.
+        Expects assessment to carry 'global_risk', 'raw_action_tier',
+        'raw_severity' and 'evidence_groups'.
+        """
+        theta_w = self.warning_threshold if warning_threshold is None else warning_threshold
+        c_min = self.min_evidence if min_evidence is None else min_evidence
+
+        raw_tier = assessment["raw_action_tier"]
+        count = len(assessment["evidence_groups"])
+        passes = (c_min <= 0) or (assessment["global_risk"] >= theta_w and count >= c_min)
+
+        if raw_tier >= 2 and not passes:
+            tier, severity = 1, "low"   # detected, but not enough evidence for a visible warning
+        else:
+            tier, severity = raw_tier, assessment["raw_severity"]
+        return tier, severity, passes
+
     def assess_message(self, text):
         """
         WHERE IT ENTERS:
         Called by the Viber bot hook and the Live Simulation UI endpoint.
-        Converts list of risk detections into a final action tier (Tier 0 to Tier 3).
+        Converts list of risk detections into a final action tier (Tier 0 to Tier 3),
+        then runs the Alert Validation / Warning Gate (evidence corroboration).
         """
         detections = self.enhanced_search(text)
         max_risk = max((item["risk_score"] for item in detections), default=0.0)
 
-        # Tier 0: No threat detected
-        if not detections:
-            severity, action_tier = "none", 0
-        # Tier 3: Critical risk (hard warning / block)
-        elif max_risk >= self.HIGH_CRITICAL_CUTOFF:
-            severity, action_tier = "critical", 3
-        # Tier 3: High risk
-        elif max_risk >= self.MODERATE_HIGH_CUTOFF:
-            severity, action_tier = "high", 3
-        # Tier 2: Moderate risk (advisory banner)
-        elif max_risk >= self.LOW_MODERATE_CUTOFF:
-            severity, action_tier = "moderate", 2
-        # Tier 1: Low risk (isolated term, informational only)
-        else:
-            severity, action_tier = "low", 1
+        raw_severity, raw_tier = self._tier_from_risk(
+            max_risk, bool(detections), self.LOW_MODERATE_CUTOFF,
+            self.MODERATE_HIGH_CUTOFF, self.HIGH_CRITICAL_CUTOFF)
 
-        return {
+        evidence = sorted(self._evidence_groups(text, detections)) if detections else []
+
+        assessment = {
             "detections": detections,
-            "severity": severity,
-            "action_tier": action_tier,
-            "is_clean": not detections,
+            "global_risk": max_risk,
+            "raw_severity": raw_severity,
+            "raw_action_tier": raw_tier,
+            "evidence_groups": evidence,
+            "evidence_count": len(evidence),
         }
+        tier, severity, passes = self.apply_warning_gate(assessment)
+
+        assessment.update({
+            "severity": severity,
+            "action_tier": tier,
+            "gate_passed": passes,
+            "is_clean": not detections,
+        })
+        return assessment

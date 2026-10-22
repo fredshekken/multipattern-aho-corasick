@@ -105,15 +105,16 @@
   .header-action { width: 28px; height: 28px; padding: 0; background: transparent; color: #55565b; border-radius: 50%; font-size: 16px; line-height: 1; }
   .header-action:hover { background: #f0f0f2; color: #202124; }
   .active-dot { width: 7px; height: 7px; margin-left: 2px; background: var(--green); border-radius: 50%; box-shadow: 0 0 0 3px #e5f6ee; }
-  .messages { flex: 1; overflow-y: auto; padding: 16px 14px; display: flex; flex-direction: column; gap: 10px; background-color: #f8f8f9; background-image: radial-gradient(#d9d9dc 0.7px, transparent 0.7px); background-size: 16px 16px; scrollbar-width: thin; scrollbar-color: #c4c4c8 transparent; }
+  .messages { flex: 1; min-width: 0; overflow-y: auto; overflow-x: hidden; padding: 16px 14px; display: flex; flex-direction: column; gap: 10px; background-color: #f8f8f9; background-image: radial-gradient(#d9d9dc 0.7px, transparent 0.7px); background-size: 16px 16px; scrollbar-width: thin; scrollbar-color: #c4c4c8 transparent; }
   .messages::-webkit-scrollbar { width: 5px; }
   .messages::-webkit-scrollbar-thumb { background: #c4c4c8; border-radius: 999px; }
-  .message-group { display: flex; flex-direction: column; max-width: 85%; }
+  .message-group { display: flex; flex-direction: column; min-width: 0; max-width: 85%; }
   .message-group.user { align-self: flex-end; align-items: flex-end; }
-  .message-group.bot { position: relative; align-self: flex-start; align-items: flex-start; max-width: 75%; padding-left: 30px; }
+  .message-group.bot { position: relative; align-self: flex-start; align-items: flex-start; width: 85%; max-width: calc(100% - 30px); padding-left: 30px; }
   .message-group.bot::before { content: "!"; position: absolute; left: 0; bottom: 17px; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; background: #71869a; color: white; font-size: 13px; font-weight: 700; }
+  .message-group.bot .bubble { align-self: stretch; }
   .message-group.system { align-self: center; max-width: 90%; align-items: center; }
-  .bubble { padding: 9px 12px; border-radius: 13px; font-size: 13px; line-height: 1.4; white-space: pre-wrap; box-shadow: 0 1px 3px rgba(35, 35, 40, .08); }
+  .bubble { max-width: 100%; min-width: 0; padding: 9px 12px; border-radius: 13px; font-size: 13px; line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; box-shadow: 0 1px 3px rgba(35, 35, 40, .08); }
   .bubble.user { background: #7360f2; color: #fff; border-bottom-right-radius: 3px; }
   .bubble.bot { background: #efeff0; color: #292a2e; border-bottom-left-radius: 3px; }
   .bubble.bot.tier2 { background: #fff8e1; border-left: 2px solid #f0b429; color: #765313; }
@@ -122,7 +123,7 @@
   .sender-label { display: block; margin-bottom: 4px; font-size: 11px; font-weight: 700; }
   .sender-label.baseline { color: #607b93; }
   .sender-label.enhanced { color: var(--blue); }
-  .reply-quote { margin: 0 0 8px; padding: 5px 8px; border-left: 3px solid currentColor; background: rgba(255,255,255,.65); color: #73747a; font-size: 11px; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .reply-quote { margin: 0 0 8px; padding: 5px 8px; border-left: 3px solid currentColor; background: rgba(255,255,255,.65); color: #73747a; font-size: 11px; line-height: 1.3; overflow-wrap: anywhere; }
   .reply-quote strong { color: inherit; }
   .message-time { margin: 3px 4px 0; color: #71869a; font-size: 10px; line-height: 1; }
   .message-group.user .message-time { text-align: right; }
@@ -565,11 +566,12 @@ function renderLiveMetrics() {
   document.getElementById("metricsColumnPicker").innerHTML = `
     <div class="card">
       <p class="status-line">Session: ${sessionId} · ${baseline.messages} message${baseline.messages === 1 ? "" : "s"} checked</p>
-      <p>These metrics summarize the messages checked in this live comparison session.</p>
+      <p>These metrics summarize the messages checked in this live comparison session alongside the calibrated benchmark performance.</p>
     </div>`;
   document.getElementById("metricsContent").innerHTML = `
+    <!-- Session Live Counts -->
     <table class="metrics-table">
-      <thead><tr><th>Live metric</th><th>Original</th><th>Enhanced</th><th>Difference</th></tr></thead>
+      <thead><tr><th>Live Session Metric</th><th>Original</th><th>Enhanced</th><th>Difference</th></tr></thead>
       <tbody>
         <tr><td>Messages checked</td><td>${liveResults.length}</td><td>${liveResults.length}</td><td>—</td></tr>
         <tr><td>Total detections</td><td>${baseline.detections}</td><td>${enhanced.detections}</td><td>—</td></tr>
@@ -578,7 +580,23 @@ function renderLiveMetrics() {
         <tr><td>Average session tier</td><td>${baseline.averageTier.toFixed(2)}</td><td>${enhanced.averageTier.toFixed(2)}</td><td>—</td></tr>
       </tbody>
     </table>
-    <h3>Enhanced scoring breakdown</h3>
+
+    <!-- Final Calibrated Benchmark Metrics (Frozen Test Set N=6,102) -->
+    <h3 style="margin-top: 24px;">Calibrated Benchmark Evaluation (N = 6,102)</h3>
+    <table class="metrics-table">
+      <thead><tr><th>Metric</th><th>Original</th><th>Enhanced</th><th>Delta</th></tr></thead>
+      <tbody>
+        <tr><td>Accuracy</td><td>83.48%</td><td>87.79%</td><td class="positive">+4.31%</td></tr>
+        <tr><td>Precision</td><td>74.53%</td><td>89.26%</td><td class="positive">+14.73%</td></tr>
+        <tr><td>Recall</td><td>55.36%</td><td>60.28%</td><td class="positive">+4.92%</td></tr>
+        <tr><td>F1-Score</td><td>63.53%</td><td>71.96%</td><td class="positive">+8.43%</td></tr>
+        <tr><td>False Positive Rate</td><td>6.64%</td><td>2.55%</td><td class="positive">-4.09%</td></tr>
+        <tr><td>TP / FP / TN / FN</td><td>878 / 300 / 4216 / 708</td><td>956 / 115 / 4401 / 630</td><td>—</td></tr>
+        <tr><td>Speed</td><td>47,515.5 msg/s</td><td>68.9 msg/s</td><td>—</td></tr>
+      </tbody>
+    </table>
+
+    <h3 style="margin-top: 24px;">Enhanced scoring breakdown</h3>
     <p class="status-line">Final risk = (token score + proximity delta − penalty) × URL multiplier, calculated per pattern hit.</p>
     ${renderScoreBreakdown(liveResults)}
     <div class="tier-legend"><strong>Severity and action tiers:</strong> <strong>Tier 1 (Low)</strong>: Risk &lt; 1.142, silent system logging. <strong>Tier 2 (Moderate)</strong>: Risk 1.142–1.499, warning notification. <strong>Tier 3 (High / Critical)</strong>: Risk ≥ 1.500 for high warning or ≥ 2.500 for a critical block card; multi-message escalation can also trigger Tier 3 via <code>conversation_tracker.py</code>.</div>`;

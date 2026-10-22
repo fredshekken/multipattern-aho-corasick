@@ -52,9 +52,11 @@ buksan
 pindutin
 i-click
 i-verify
+i-update
 mag-login
 kumpirmahin
 paki-verify
+mag-update
 
 [category: security_and_status_terms]
 blocked
@@ -76,6 +78,7 @@ na-suspend
 na-hold
 
 [category: financial_terms]
+account 
 bitcoin
 wallet
 password

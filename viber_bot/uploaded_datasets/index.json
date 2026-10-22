@@ -1,1 +1,35 @@
-{}
+{
+  "0429c441ef50": {
+    "id": "0429c441ef50",
+    "original_filename": "philippine_sms_balanced.csv",
+    "stored_filename": "0429c441ef50_philippine_sms_balanced.csv",
+    "columns": [
+      "text",
+      "label"
+    ],
+    "row_count": 2040,
+    "uploaded_at": 1789217985.3401077
+  },
+  "da24fda71670": {
+    "id": "da24fda71670",
+    "original_filename": "philippine_sms_cleaned.csv",
+    "stored_filename": "da24fda71670_philippine_sms_cleaned.csv",
+    "columns": [
+      "text",
+      "label"
+    ],
+    "row_count": 6102,
+    "uploaded_at": 1789319837.756506
+  },
+  "4ce8fec37e73": {
+    "id": "4ce8fec37e73",
+    "original_filename": "philippine_sms_cleaned.csv",
+    "stored_filename": "4ce8fec37e73_philippine_sms_cleaned.csv",
+    "columns": [
+      "text",
+      "label"
+    ],
+    "row_count": 6102,
+    "uploaded_at": 1789437410.3982065
+  }
+}
