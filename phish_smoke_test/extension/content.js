@@ -35,7 +35,7 @@ const REASONS = {
 // ---------------------------------------------------------------------------
 // SITE SETTINGS
 // ---------------------------------------------------------------------------
-const IS_FB = /(^|\.)facebook\.com$|(^|\.)messenger\.com$/.test(location.hostname);
+const IS_FB = /(^|\.)(facebook|messenger|instagram)\.com$/.test(location.hostname);
 
 // Telegram Web A structure (and the local test page)
 const TELEGRAM_SELECTOR = [
@@ -45,7 +45,7 @@ const TELEGRAM_SELECTOR = [
   "div.text[dir='auto']"
 ].join(", ");
 
-// Messenger / Facebook Messages: class names are random and change often,
+// Messenger / Facebook / Instagram messages: class names are random and change often,
 // so we use the stable part: text blocks with dir="auto".
 const FB_SELECTOR = "div[dir='auto']";
 const FB_SKIP = 'a, [role="navigation"], [role="banner"], [role="complementary"], [role="textbox"], [contenteditable="true"]';
