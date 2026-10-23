@@ -1,6 +1,41 @@
+import logging
 import re
+import ssl
 from collections import deque
+from html.parser import HTMLParser
 from pathlib import Path
+from urllib.error import URLError
+from urllib.parse import urlsplit
+from urllib.request import Request, urlopen
+
+import certifi
+
+logger = logging.getLogger(__name__)
+
+
+class _DestinationLinkParser(HTMLParser):
+    """Collect external-looking links and their labels from shortener preview pages."""
+
+    def __init__(self):
+        super().__init__()
+        self.links = []
+        self._anchor_href = None
+        self._anchor_text = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag.lower() == "a":
+            self._anchor_href = dict(attrs).get("href")
+            self._anchor_text = []
+
+    def handle_data(self, data):
+        if self._anchor_href is not None:
+            self._anchor_text.append(data)
+
+    def handle_endtag(self, tag):
+        if tag.lower() == "a" and self._anchor_href is not None:
+            self.links.append((self._anchor_href, "".join(self._anchor_text).strip()))
+            self._anchor_href = None
+            self._anchor_text = []
 
 
 class EnhancedAhoCorasick:
@@ -9,7 +44,7 @@ class EnhancedAhoCorasick:
     1. Text Normalization & Bitap Fuzzy Matching (Objective 1)
     2. Inverse Distance Weighting (IDW) Context Proximity (Objective 2)
     3. Taglish Morphological Affix Stripping & Phonetic Map (Objective 3)
-    4. Delimiter-Driven Structural URL Segmentation (Objective 4)
+    4. Delimiter-Driven Structural URL Segmentation & Domain Whitelisting (Objective 4)
     Plus a fallback heuristic anomaly scorer for unseen zero-day messages.
     """
 
@@ -555,7 +590,7 @@ class EnhancedAhoCorasick:
                 return False
         return self.out[curr] > 0
 
-    def _affix_search(self, text, original_text):
+    def _affix_search(self, text):
         """
         WHERE IT ENTERS:
         Executes as Layer 3 of enhanced_search.
@@ -685,7 +720,7 @@ class EnhancedAhoCorasick:
         }
 
     # =========================================================================
-    # Objective 4: Delimiter-Driven Structural URL Segmentation
+    # Objective 4: Delimiter-Driven Structural URL Segmentation & Domain Whitelisting
     # SOP Solved: SOP 4 (Distinguishing brand spoofing from authentic domain paths)
     #
     # Relevant Terms:
@@ -694,6 +729,7 @@ class EnhancedAhoCorasick:
     # Second-Level Domain (SLD) - The actual registered domain (e.g., "gcash" in gcash.com).
     # Spoofing Subdomain - Deceptive prefix added by attackers (e.g., "gcash.scam-domain.com").
     # URL Shortener - Redirection service hiding the destination (e.g., bit.ly).
+    # Whitelisted Root Domain - Verified official institution domains exempted from brand spoofing.
     #
     # Relevant References:
     # - Zhang et al. (2007) CANTINA
@@ -703,17 +739,37 @@ class EnhancedAhoCorasick:
     # Known shorteners that receive highest risk weighting
     URL_SHORTENERS = {
         'bit.ly', 'tinyurl.com', 'goo.gl', 'ow.ly', 't.co',
-        'rb.gy', 'cutt.ly', 'shorturl.at', 'is.gd', 'buff.ly'
+        'rb.gy', 'cutt.ly', 'shorturl.at', 'is.gd', 'buff.ly', 'bitly.com'
+    }
+
+    # Verified authentic root domains (SLD + TLD) of Philippine institutions
+    LEGITIMATE_DOMAINS = {
+        "gcash.com",
+        "maya.ph",
+        "paymaya.com",
+        "seabank.com.ph",
+        "gotyme.com.ph",
+        "bdo.com.ph",
+        "bpi.com.ph",
+        "unionbankph.com",
+        "landbank.com",
+        "metrobank.com.ph",
+        "shopee.ph",
+        "lazada.com.ph",
+        "grab.com",
+        "viber.com",
+        "telegram.org"
     }
 
     # Segment multipliers based on where a brand keyword appears
     SEGMENT_RISK = {
-        'shortener': 2.5,   # Shorteners mask destinations: 2.5x multiplier
-        'subdomain':  2.0,  # Brand in subdomain indicates spoofing: 2.0x multiplier
-        'path':       1.5,  # Brand in path/folder: 1.5x multiplier
-        'query':      1.5,  # Brand in query parameter: 1.5x multiplier
-        'sld':        1.0,  # Brand in registered domain (likely legitimate): 1.0x (no escalation)
-        'none':       1.0,  # Match is regular text outside any URL: 1.0x
+        'shortener':   2.5,  # Shorteners mask destinations: 2.5x multiplier
+        'subdomain':   2.0,  # Brand in subdomain indicates spoofing: 2.0x multiplier
+        'path':        1.5,  # Brand in path/folder: 1.5x multiplier
+        'query':       1.5,  # Brand in query parameter: 1.5x multiplier
+        'sld':         1.0,  # Brand in registered domain (likely legitimate): 1.0x (no escalation)
+        'whitelisted': 1.0,  # Authenticated registered root domain: 1.0x baseline
+        'none':        1.0,  # Match is regular text outside any URL: 1.0x
     }
 
     def _segment_url(self, url):
@@ -755,17 +811,32 @@ class EnhancedAhoCorasick:
             'query':      query,
         }
 
-    def _analyze_url(self, text, index):
+    @staticmethod
+    def _registered_root_domain(segments):
+        host_parts = [
+            part.lower()
+            for part in segments['subdomains'] + [segments['sld'], segments['tld']]
+            if part
+        ]
+        if len(host_parts) >= 3 and host_parts[-2] in {
+            "com", "gov", "org", "edu", "net"
+        }:
+            return ".".join(host_parts[-3:])
+        if len(host_parts) >= 2:
+            return ".".join(host_parts[-2:])
+        return ".".join(host_parts)
+
+    def _analyze_url(self, text):
         """
         WHERE IT ENTERS:
         Called at the start of enhanced_search.
-        Locates any URLs in the message, segments them, and calculates the risk multiplier.
+        Locates any URLs in the message, segments them, checks whitelists,
+        and calculates the risk multiplier.
         """
-        normalized_text = self._normalize(text)
         url_pattern = r'(?:https?://|www\.)\S+|\b(?:[a-z0-9-]+\.)+[a-z]{2,}(?:/\S*)?'
         norm_patterns = self.norm_patterns
 
-        for m in re.finditer(url_pattern, normalized_text, re.IGNORECASE):
+        for m in re.finditer(url_pattern, text, re.IGNORECASE):
             url = m.group()
             segments = self._segment_url(url)
 
@@ -773,32 +844,78 @@ class EnhancedAhoCorasick:
             full_host = '.'.join(
                 segments['subdomains'] + [segments['sld'], segments['tld']]
             ).lower()
-            if any(s in full_host for s in self.URL_SHORTENERS):
-                return {"multiplier": self.SEGMENT_RISK['shortener'], "segment": "shortener"}
+            if any(
+                full_host == shortener or full_host.endswith("." + shortener)
+                for shortener in self.URL_SHORTENERS
+            ):
+                logger.info("[URL analysis] Shortener detected: %s", url)
+                expanded_url = self._unshorten_url(url)
+                logger.info("[URL analysis] Expanded destination: %s", expanded_url)
+                if expanded_url != url:
+                    expanded_segments = self._segment_url(expanded_url)
+                    expanded_root = self._registered_root_domain(expanded_segments)
+                    if expanded_root in self.LEGITIMATE_DOMAINS:
+                        logger.info(
+                            "[URL analysis] Destination classified as whitelisted: %s",
+                            expanded_root,
+                        )
+                        return {
+                            "multiplier": self.SEGMENT_RISK['whitelisted'],
+                            "segment": "sld",
+                            "is_whitelisted": True,
+                            "expanded_url": expanded_url,
+                        }
+
+                logger.warning(
+                    "[URL analysis] Destination is unverified; retaining shortener risk: %s",
+                    expanded_url,
+                )
+                return {
+                    "multiplier": self.SEGMENT_RISK['shortener'],
+                    "segment": "shortener",
+                    "is_whitelisted": False,
+                    "expanded_url": expanded_url,
+                }
+
+            # Resolve registered root domain (handling .com.ph, .edu.ph, etc.)
+            root_domain = self._registered_root_domain(segments)
+
+            # Check if domain is in the verified legitimate institutions whitelist
+            is_whitelisted = root_domain in self.LEGITIMATE_DOMAINS
+            logger.info(
+                "[URL analysis] URL: %s | registered root: %s | classification: %s",
+                url,
+                root_domain or "(unknown)",
+                "whitelisted" if is_whitelisted else "unverified",
+            )
+
+            # If registered root is whitelisted, return baseline immediately
+            if is_whitelisted:
+                return {"multiplier": self.SEGMENT_RISK['whitelisted'], "segment": "sld", "is_whitelisted": True}
 
             # Check where pattern keywords fall inside URL components
             for norm_p in norm_patterns:
-                # Subdomain: Brand spoofing attempt
+                # Subdomain: Brand spoofing attempt (brand token present in subdomain while not whitelisted)
                 if any(norm_p in self._normalize(sub) for sub in segments['subdomains']):
-                    return {"multiplier": self.SEGMENT_RISK['subdomain'], "segment": "subdomain"}
+                    return {"multiplier": self.SEGMENT_RISK['subdomain'], "segment": "subdomain", "is_whitelisted": False}
 
                 # Path or Query: Moderate risk
                 if norm_p in self._normalize(segments['path']):
-                    return {"multiplier": self.SEGMENT_RISK['path'], "segment": "path"}
+                    return {"multiplier": self.SEGMENT_RISK['path'], "segment": "path", "is_whitelisted": False}
                 if norm_p in self._normalize(segments['query']):
-                    return {"multiplier": self.SEGMENT_RISK['query'], "segment": "query"}
+                    return {"multiplier": self.SEGMENT_RISK['query'], "segment": "query", "is_whitelisted": False}
 
                 # SLD: Brand owns the domain
                 if norm_p in self._normalize(segments['sld']):
-                    return {"multiplier": self.SEGMENT_RISK['sld'], "segment": "sld"}
+                    return {"multiplier": self.SEGMENT_RISK['sld'], "segment": "sld", "is_whitelisted": is_whitelisted}
 
-        return {"multiplier": self.SEGMENT_RISK['none'], "segment": "none"}
+        return {"multiplier": self.SEGMENT_RISK['none'], "segment": "none", "is_whitelisted": False}
 
     # -------------------------------------------------------------------------
     # MASTER SCAN FUNCTION: Coordinates All Detection Layers
     # -------------------------------------------------------------------------
 
-    def enhanced_search(self, text, anomaly_threshold=None):
+    def enhanced_search(self, text, anomaly_threshold=None, *, _url_info=None):
         """
         WHERE IT ENTERS:
         The main scanning entrypoint. Called by server.py and calibrate_thresholds.py.
@@ -813,7 +930,7 @@ class EnhancedAhoCorasick:
             anomaly_threshold = self.anomaly_threshold
 
         # Precompute URL multiplier once for the entire message (Objective 4)
-        url_info = self._analyze_url(text, 0)
+        url_info = _url_info if _url_info is not None else self._analyze_url(text)
         url_risk = url_info["multiplier"]
 
         # ---------------------------------------------------------------------
@@ -862,6 +979,7 @@ class EnhancedAhoCorasick:
                                     "proximity_delta": round(proximity_delta, 3),
                                     "url_multiplier": url_risk,
                                     "url_segment": url_info["segment"],
+                                    "is_whitelisted": url_info.get("is_whitelisted", False),
                                     "penalty": 0.0,
                                     "final_risk": round(final_risk, 3),
                                 },
@@ -871,10 +989,9 @@ class EnhancedAhoCorasick:
         # Layer 2: Bitap Fuzzy Search (Residual Leetspeak / Typos)
         # ---------------------------------------------------------------------
         for j, (pattern, norm_pattern) in enumerate(zip(self.patterns, self.norm_patterns)):
-            # LENGTH THRESHOLD GUARD:
-            # Short keywords (<= 4 chars like 'maya') must not use Bitap fuzzy matching
-            # to prevent high-frequency collisions with Tagalog words (e.g., 'kaya' -> 'maya')
-            if len(norm_pattern) < 5:
+            # Keep one- and two-character terms out of fuzzy matching; longer short
+            # terms still require word boundaries and the normal risk threshold.
+            if len(norm_pattern) < 3:
                 continue
 
             bitap_matches = self._bitap_search(clean_text, norm_pattern, self.max_errors)
@@ -917,6 +1034,7 @@ class EnhancedAhoCorasick:
                             "proximity_delta": round(proximity_delta, 3),
                             "url_multiplier": url_risk,
                             "url_segment": url_info["segment"],
+                            "is_whitelisted": url_info.get("is_whitelisted", False),
                             "penalty": round(fuzzy_penalty, 3),
                             "final_risk": round(final_risk, 3),
                         },
@@ -925,7 +1043,7 @@ class EnhancedAhoCorasick:
         # ---------------------------------------------------------------------
         # Layer 3: Affix-Aware Morphological Search (Taglish Affix Stripping)
         # ---------------------------------------------------------------------
-        affix_matches = self._affix_search(clean_text, text)
+        affix_matches = self._affix_search(clean_text)
         for (j, token, stripped_root, word_pos) in affix_matches:
             key = (j, word_pos)
             if key in reported:
@@ -959,6 +1077,7 @@ class EnhancedAhoCorasick:
                         "proximity_delta": round(proximity_delta, 3),
                         "url_multiplier": url_risk,
                         "url_segment": url_info["segment"],
+                        "is_whitelisted": url_info.get("is_whitelisted", False),
                         "penalty": affix_penalty,
                         "final_risk": round(final_risk, 3),
                     },
@@ -987,6 +1106,7 @@ class EnhancedAhoCorasick:
                         "proximity_delta": 0.0,
                         "url_multiplier": 1.0,
                         "url_segment": "none",
+                        "is_whitelisted": False,
                         "penalty": 0.0,
                         "anomaly_score": anomaly_score,
                         "final_risk": round(0.95 + (anomaly_score * 0.4), 3),
@@ -1038,7 +1158,7 @@ class EnhancedAhoCorasick:
     # and 'none' do NOT count, so an exact trusted-looking domain adds no evidence.
     RISKY_URL_SEGMENTS = {"shortener", "subdomain", "path", "query"}
 
-    def _evidence_groups(self, text, detections):
+    def _evidence_groups(self, text, detections, analyzed_url=None):
         """Returns the set of independent evidence groups present in the message."""
         pattern_to_group = {}
         for category, group_patterns in self.pattern_groups.items():
@@ -1059,14 +1179,18 @@ class EnhancedAhoCorasick:
                     present.add(group)
             if item.get("match_type") == "fuzzy":
                 present.add("obfuscation")
-            if breakdown.get("url_segment") in self.RISKY_URL_SEGMENTS:
+            if breakdown.get("url_segment") in self.RISKY_URL_SEGMENTS and not breakdown.get("is_whitelisted", False):
                 present.add("url_risk")
 
         # Obfuscated tokens in the raw text (e.g. "c@sh", "p4ssw0rd")
         if re.search(r'\b[a-z]+[0-9@$]+[a-z]+\b', text.lower()):
             present.add("obfuscation")
-        if self._analyze_url(text, 0)["segment"] in self.RISKY_URL_SEGMENTS:
+
+        if analyzed_url is None:
+            analyzed_url = self._analyze_url(text)
+        if analyzed_url["segment"] in self.RISKY_URL_SEGMENTS and not analyzed_url.get("is_whitelisted", False):
             present.add("url_risk")
+
         return present
 
     @staticmethod
@@ -1108,14 +1232,18 @@ class EnhancedAhoCorasick:
         Converts list of risk detections into a final action tier (Tier 0 to Tier 3),
         then runs the Alert Validation / Warning Gate (evidence corroboration).
         """
-        detections = self.enhanced_search(text)
+        analyzed_url = self._analyze_url(text)
+        detections = self.enhanced_search(text, _url_info=analyzed_url)
         max_risk = max((item["risk_score"] for item in detections), default=0.0)
 
         raw_severity, raw_tier = self._tier_from_risk(
             max_risk, bool(detections), self.LOW_MODERATE_CUTOFF,
             self.MODERATE_HIGH_CUTOFF, self.HIGH_CRITICAL_CUTOFF)
 
-        evidence = sorted(self._evidence_groups(text, detections)) if detections else []
+        evidence = (
+            sorted(self._evidence_groups(text, detections, analyzed_url))
+            if detections else []
+        )
 
         assessment = {
             "detections": detections,
@@ -1134,3 +1262,65 @@ class EnhancedAhoCorasick:
             "is_clean": not detections,
         })
         return assessment
+
+    def _unshorten_url(self, shortened_url, timeout=2.0):
+        """
+        Resolve redirects and read shortener preview pages without executing page scripts.
+        """
+        target = shortened_url if shortened_url.startswith(('http://', 'https://')) else f"http://{shortened_url}"
+
+        try:
+            req = Request(
+                target,
+                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'},
+                method='GET',
+            )
+
+            tls_context = ssl.create_default_context(cafile=certifi.where())
+            with urlopen(req, timeout=timeout, context=tls_context) as response:
+                resolved_url = response.geturl()
+                resolved_host = (urlsplit(resolved_url).hostname or "").lower()
+                if resolved_host and not any(
+                    resolved_host == shortener or resolved_host.endswith("." + shortener)
+                    for shortener in self.URL_SHORTENERS
+                ):
+                    return resolved_url
+
+                page = response.read(256 * 1024).decode("utf-8", errors="replace")
+                parser = _DestinationLinkParser()
+                parser.feed(page)
+
+                shortener_host = (urlsplit(target).hostname or "").lower()
+                for href, label in parser.links:
+                    for candidate in (href, label):
+                        candidate = candidate.strip().strip(" \t\r\n<>\"'.,;)")
+                        if not candidate:
+                            continue
+                        if candidate.startswith("//"):
+                            candidate = "https:" + candidate
+                        elif not urlsplit(candidate).scheme:
+                            candidate = "https://" + candidate
+
+                        parsed = urlsplit(candidate)
+                        candidate_host = (parsed.hostname or "").lower()
+                        if not candidate_host or candidate_host == shortener_host:
+                            continue
+                        if any(
+                            candidate_host == shortener or candidate_host.endswith("." + shortener)
+                            for shortener in self.URL_SHORTENERS
+                        ):
+                            continue
+                        logger.info(
+                            "[URL analysis] Destination extracted from preview page: %s",
+                            candidate,
+                        )
+                        return candidate
+
+                return resolved_url
+        except (URLError, TimeoutError) as exc:
+            logger.warning(
+                "[URL analysis] Could not expand %s: %s",
+                shortened_url,
+                exc,
+            )
+            return shortened_url

@@ -21,6 +21,30 @@ const TIER2_MIN_EVIDENCE = 2;
 const BACKEND_URL = "http://127.0.0.1:8000/scan";
 const FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
 const UI_CLASS = "phish-shield-ui";
+const TRUSTED_DOMAINS = [
+  "bpi.com.ph",
+  "gcash.com",
+  "maya.ph",
+  "paymaya.com",
+  "seabank.com.ph",
+  "gotyme.com.ph",
+  "bdo.com.ph",
+  "unionbankph.com",
+  "landbank.com",
+  "metrobank.com.ph",
+  "securitybank.com",
+  "rcbc.com",
+  "pnb.com.ph",
+  "chinabank.ph",
+  "psbank.com.ph",
+  "psbankonline.com.ph",
+  "cimbbank.com.ph",
+  "shopee.ph",
+  "lazada.com.ph",
+  "globe.com.ph",
+  "smart.com.ph",
+  "telegram.org"
+];
 
 // Plain-language reasons for each evidence group (formatted as indicator chips)
 const REASONS = {
@@ -51,6 +75,11 @@ const FB_SELECTOR = "div[dir='auto']";
 const FB_SKIP = 'a, [role="navigation"], [role="banner"], [role="complementary"], [role="textbox"], [contenteditable="true"]';
 
 const SELECTOR = IS_FB ? FB_SELECTOR : TELEGRAM_SELECTOR;
+
+function isWhitelistedUrlOnly(text) {
+  const clean = text.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+  return TRUSTED_DOMAINS.some(domain => clean === domain || clean.endsWith("." + domain));
+}
 
 // On Messenger, skip the message box, sidebar previews, and link cards.
 function shouldSkip(node) {
@@ -115,6 +144,7 @@ async function inspectBubble(node) {
 
   // Mark immediately as scanned to prevent redundant fetches and observer loops
   node.dataset.phishScanned = "true";
+  if (isWhitelistedUrlOnly(text)) return;
 
   try {
     const data = await scanText(text);
@@ -143,7 +173,18 @@ function detailText(data) {
 }
 
 function renderResult(node, data) {
-  if (!data || data.tier < 1) return;
+  if (!data) return;
+
+  if (data.action_tier === 0 || data.tier === 0 || data.is_clean === true) {
+    const existingBanner = node.previousElementSibling?.classList.contains(UI_CLASS)
+      ? node.previousElementSibling
+      : null;
+    existingBanner?.remove();
+    node.querySelectorAll(`.${UI_CLASS}`).forEach((element) => element.remove());
+    return;
+  }
+
+  if (data.tier < 1) return;
 
   let mode = TIER_DISPLAY[data.tier] || "none";
   if (data.tier === 2 && evidenceCount(data) < TIER2_MIN_EVIDENCE) {

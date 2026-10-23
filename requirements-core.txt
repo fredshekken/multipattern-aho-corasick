@@ -1,6 +1,6 @@
 # Core Algorithm Dependencies
-# The EnhancedAhoCorasick algorithm requires ONLY Python stdlib.
-# This file documents the bare minimum for programmatic use.
+# Minimal dependencies for programmatic use of EnhancedAhoCorasick.
 
-# No external packages required.
-# Uses only Python standard library: re, collections, pathlib
+# Uses Python standard library plus certifi for verified TLS when resolving
+# URL shortener redirects.
+certifi>=2024.2.2

@@ -7,6 +7,12 @@ contains only the algorithm itself. Mirrors the structure of
 original_aho/test.py, which does the same for the baseline algorithm.
 """
 
+import logging
+import ssl
+from io import StringIO
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
 from enhanced_aho_corasick import EnhancedAhoCorasick
 
 
@@ -48,15 +54,17 @@ def build_scanner():
 
 def test_o1_normalization_and_trie(scanner):
     msg = "Urgent: Your G-C@sh account is vlocked! Verify here: http://bit.ly/fake-link"
-    run_test("O1 — Normalization + Trie (symbol substitution)", scanner, msg)
+    with patch.object(scanner, "_unshorten_url", return_value="http://bit.ly/fake-link"):
+        run_test("O1 — Normalization + Trie (symbol substitution)", scanner, msg)
 
 
 def test_o1_fuzzy_bitap_layer(scanner):
     msg = "Urgent: Your gczsh account is blxcked! Verify here: http://bit.ly/fake-link"
-    run_test("O1 — Fuzzy (Bitap) layer (residual substitution obfuscation)", scanner, msg)
+    with patch.object(scanner, "_unshorten_url", return_value="http://bit.ly/fake-link"):
+        run_test("O1 — Fuzzy (Bitap) layer (residual substitution obfuscation)", scanner, msg)
 
 
-def test_o1_fuzzy_word_boundary_guard(scanner):
+def test_o1_fuzzy_word_boundary_guard():
     """
     Regression test for the "otp" / "https" false-positive bug.
 
@@ -139,9 +147,122 @@ def test_o4_brand_in_sld(scanner):
     run_test("O4 — Brand in SLD (LOW risk, legitimate)", scanner, msg)
 
 
+def test_o4_url_analysis_uses_original_url_text():
+    scanner = build_scanner()
+    result = scanner._analyze_url("https://viber.com/help")
+
+    assert result["is_whitelisted"]
+    assert result["segment"] == "sld"
+
+
 def test_o4_url_shortener(scanner):
     msg = "Urgent: Click here to verify your gcash: https://bit.ly/xK92p"
-    run_test("O4 — URL shortener (HIGHEST risk)", scanner, msg)
+    with patch.object(scanner, "_unshorten_url", return_value="https://bit.ly/xk92p"):
+        run_test("O4 — URL shortener (HIGHEST risk)", scanner, msg)
+
+
+def test_o4_shortener_resolves_whitelisted_destination():
+    patterns = EnhancedAhoCorasick.parse_pattern_groups(
+        (Path(__file__).with_name("default_patterns.txt")).read_text(encoding="utf-8")
+    )
+    scanner = EnhancedAhoCorasick(patterns)
+    expanded_url = "https://www.bpi.com.ph/cybersecurity"
+    log_output = StringIO()
+    handler = logging.StreamHandler(log_output)
+    logger = logging.getLogger(EnhancedAhoCorasick.__module__)
+    previous_level = logger.level
+    logger.setLevel(logging.INFO)
+    logger.addHandler(handler)
+
+    try:
+        with patch.object(scanner, "_unshorten_url", return_value=expanded_url) as unshorten:
+            result = scanner.assess_message("https://bit.ly/actualbpisece")
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(previous_level)
+        handler.close()
+
+    assert unshorten.call_count == 1
+    assert expanded_url in log_output.getvalue()
+    assert "classified as whitelisted" in log_output.getvalue()
+    assert result["action_tier"] == 0
+    assert not result["detections"]
+
+
+def test_o4_unresolved_shorteners_remain_unverified():
+    scanner = build_scanner()
+
+    for url in ("https://bit.ly/4yGX271", "https://bit.ly/12Tst"):
+        with patch.object(scanner, "_unshorten_url", return_value=url):
+            result = scanner._analyze_url(url)
+
+        assert not result["is_whitelisted"]
+        assert result["segment"] == "shortener"
+        assert result["multiplier"] == scanner.SEGMENT_RISK["shortener"]
+
+
+def test_o4_shortener_request_uses_verified_certifi_tls():
+    patterns = EnhancedAhoCorasick.parse_pattern_groups(
+        Path(__file__).with_name("default_patterns.txt").read_text(encoding="utf-8")
+    )
+    scanner = EnhancedAhoCorasick(patterns)
+    response = MagicMock()
+    response.__enter__.return_value = response
+    response.geturl.return_value = "https://bit.ly/actualbpisece"
+    response.read.return_value = (
+        b'<a href="https://www.bpi.com.ph/personal/bank/digital-banking/online/cybersecurity">'
+        b'bpi.com.ph/personal/bank/digital-banking/online/cybersecurity</a>'
+    )
+
+    with patch("enhanced_aho_corasick.urlopen", return_value=response) as mocked_urlopen:
+        result = scanner.assess_message("https://bit.ly/actualbpisece")
+
+    assert result["action_tier"] == 0
+    assert not result["detections"]
+    context = mocked_urlopen.call_args.kwargs["context"]
+    request = mocked_urlopen.call_args.args[0]
+    assert context.verify_mode == ssl.CERT_REQUIRED
+    assert context.check_hostname
+    assert context.get_ca_certs()
+    assert request.get_method() == "GET"
+    response.read.assert_called_once_with(256 * 1024)
+
+
+def test_o4_preview_reveals_unverified_destination_as_risky():
+    scanner = build_scanner()
+    preview_destinations = {
+        "https://bit.ly/4yGX271": "https://bpi-security-update.com/login",
+        "https://bit.ly/12Tst": "http://vmsvedaweb.com/gayatri/",
+    }
+
+    for short_url, destination in preview_destinations.items():
+        response = MagicMock()
+        response.__enter__.return_value = response
+        response.geturl.return_value = short_url
+        response.read.return_value = (
+            f'<a href="{destination}">{destination.removeprefix("https://").removeprefix("http://")}</a>'
+        ).encode("utf-8")
+
+        with patch("enhanced_aho_corasick.urlopen", return_value=response):
+            result = scanner._analyze_url(short_url)
+
+        assert result["expanded_url"] == destination
+        assert not result["is_whitelisted"]
+        assert result["segment"] == "shortener"
+        assert result["multiplier"] == scanner.SEGMENT_RISK["shortener"]
+
+
+def test_o4_shortener_keeps_risk_for_unverified_destination():
+    scanner = build_scanner()
+    expanded_url = "https://unverified.example/login"
+
+    with patch.object(scanner, "_unshorten_url", return_value=expanded_url):
+        result = scanner._analyze_url("https://bit.ly/unverified")
+
+    assert not result["is_whitelisted"]
+    assert result["segment"] == "shortener"
+    assert result["multiplier"] == scanner.SEGMENT_RISK["shortener"]
+    assert result["expanded_url"] == expanded_url
 
 
 def test_o4_brand_in_path(scanner):
@@ -162,7 +283,7 @@ if __name__ == "__main__":
 
     test_o1_normalization_and_trie(scanner)
     test_o1_fuzzy_bitap_layer(scanner)
-    test_o1_fuzzy_word_boundary_guard(scanner)
+    test_o1_fuzzy_word_boundary_guard()
 
     test_o2_boosters_increase_score(scanner)
     test_o2_neutralizers_suppress_score(scanner)
@@ -172,7 +293,10 @@ if __name__ == "__main__":
 
     test_o4_brand_in_subdomain(scanner)
     test_o4_brand_in_sld(scanner)
+    test_o4_url_analysis_uses_original_url_text()
     test_o4_url_shortener(scanner)
+    test_o4_shortener_resolves_whitelisted_destination()
+    test_o4_shortener_keeps_risk_for_unverified_destination()
     test_o4_brand_in_path(scanner)
 
     print(f"\n{'='*60}")
