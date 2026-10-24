@@ -1,12 +1,19 @@
 import logging
 import re
+import socket
 import ssl
+import time
 from collections import deque
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.error import URLError
-from urllib.parse import urlsplit
-from urllib.request import Request, urlopen
+from urllib.error import HTTPError, URLError
+from urllib.parse import parse_qs, urljoin, urlsplit
+from urllib.request import (
+    HTTPRedirectHandler,
+    HTTPSHandler,
+    Request,
+    build_opener,
+)
 
 import certifi
 
@@ -36,6 +43,19 @@ class _DestinationLinkParser(HTMLParser):
             self.links.append((self._anchor_href, "".join(self._anchor_text).strip()))
             self._anchor_href = None
             self._anchor_text = []
+
+
+class _LocationCaptureRedirectHandler(HTTPRedirectHandler):
+    """Capture a redirect target without requesting that target."""
+
+    def __init__(self):
+        super().__init__()
+        self.redirect_url = None
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        del req, fp, code, msg, headers
+        self.redirect_url = newurl
+        return None
 
 
 class EnhancedAhoCorasick:
@@ -742,6 +762,8 @@ class EnhancedAhoCorasick:
         'rb.gy', 'cutt.ly', 'shorturl.at', 'is.gd', 'buff.ly', 'bitly.com'
     }
 
+    TRACKING_REDIRECT_DOMAINS = {"viglink.com"}
+
     # Verified authentic root domains (SLD + TLD) of Philippine institutions
     LEGITIMATE_DOMAINS = {
         "gcash.com",
@@ -826,6 +848,47 @@ class EnhancedAhoCorasick:
             return ".".join(host_parts[-2:])
         return ".".join(host_parts)
 
+    @classmethod
+    def _unwrap_tracking_redirect(cls, url):
+        """Extract an embedded destination from known redirect-tracking URLs."""
+        current_url = url
+        for _ in range(3):
+            parsed = urlsplit(current_url)
+            hostname = (parsed.hostname or "").lower()
+            if not any(
+                hostname == domain or hostname.endswith("." + domain)
+                for domain in cls.TRACKING_REDIRECT_DOMAINS
+            ):
+                break
+
+            query = parse_qs(parsed.query)
+            embedded_url = next(
+                (
+                    value
+                    for key in ("u", "url", "target", "destination")
+                    for value in query.get(key, [])
+                    if urlsplit(value).scheme in ("http", "https")
+                    and urlsplit(value).hostname
+                ),
+                None,
+            )
+            if not embedded_url or embedded_url == current_url:
+                break
+            current_url = embedded_url
+        return current_url
+
+    def _remove_whitelisted_urls(self, text):
+        url_pattern = r'(?:https?://|www\.)\S+|\b(?:[a-z0-9-]+\.)+[a-z]{2,}(?:/\S*)?'
+
+        def replace_url(match):
+            candidate = match.group().rstrip(".,;:!?)]}")
+            segments = self._segment_url(candidate)
+            if self._registered_root_domain(segments) not in self.LEGITIMATE_DOMAINS:
+                return match.group()
+            return "".join("\n" if char == "\n" else " " for char in match.group())
+
+        return re.sub(url_pattern, replace_url, text, flags=re.IGNORECASE)
+
     def _analyze_url(self, text):
         """
         WHERE IT ENTERS:
@@ -848,33 +911,76 @@ class EnhancedAhoCorasick:
                 full_host == shortener or full_host.endswith("." + shortener)
                 for shortener in self.URL_SHORTENERS
             ):
-                logger.info("[URL analysis] Shortener detected: %s", url)
+                print(f"[URL analysis] Shortener detected: {url}", flush=True)
                 expanded_url = self._unshorten_url(url)
-                logger.info("[URL analysis] Expanded destination: %s", expanded_url)
                 if expanded_url != url:
+                    expanded_url = self._unwrap_tracking_redirect(expanded_url)
                     expanded_segments = self._segment_url(expanded_url)
                     expanded_root = self._registered_root_domain(expanded_segments)
-                    if expanded_root in self.LEGITIMATE_DOMAINS:
-                        logger.info(
-                            "[URL analysis] Destination classified as whitelisted: %s",
-                            expanded_root,
+                    is_dest_trusted = expanded_root in self.LEGITIMATE_DOMAINS
+                    print(
+                        f"[URL analysis] Successfully unmasked: {url} -> {expanded_url}",
+                        flush=True,
+                    )
+                    print(
+                        f"[URL analysis] Resolved root: {expanded_root or '(unknown)'} "
+                        f"| Whitelisted: {is_dest_trusted}",
+                        flush=True,
+                    )
+                    if is_dest_trusted:
+                        print(
+                            f"[URL analysis] Destination is verified legitimate "
+                            f"({expanded_root}). Suppressing shortener risk.",
+                            flush=True,
                         )
                         return {
                             "multiplier": self.SEGMENT_RISK['whitelisted'],
                             "segment": "sld",
                             "is_whitelisted": True,
+                            "url": url,
                             "expanded_url": expanded_url,
+                            "unmasked_url": expanded_url,
+                            "unmasked_root": expanded_root,
+                            "shortener_untrusted": False,
                         }
 
-                logger.warning(
-                    "[URL analysis] Destination is unverified; retaining shortener risk: %s",
-                    expanded_url,
+                    print(
+                        f"[URL analysis] Alert: Unmasked destination "
+                        f"({expanded_root or '(unknown)'}) is NOT in the trusted "
+                        f"whitelist. Retaining shortener risk "
+                        f"({self.SEGMENT_RISK['shortener']}x).",
+                        flush=True,
+                    )
+                    return {
+                        "multiplier": self.SEGMENT_RISK['shortener'],
+                        "segment": "shortener",
+                        "is_whitelisted": False,
+                        "url": url,
+                        "expanded_url": expanded_url,
+                        "unmasked_url": expanded_url,
+                        "unmasked_root": expanded_root,
+                        "shortener_untrusted": True,
+                        "reason": (
+                            "Shortened link reveals untrusted destination: "
+                            f"{expanded_root or '(unknown)'}"
+                        ),
+                    }
+
+                print(
+                    f"[URL analysis] Destination could not be resolved; "
+                    f"retaining shortener risk: {url}",
+                    flush=True,
                 )
                 return {
                     "multiplier": self.SEGMENT_RISK['shortener'],
                     "segment": "shortener",
                     "is_whitelisted": False,
+                    "url": url,
                     "expanded_url": expanded_url,
+                    "unmasked_url": None,
+                    "unmasked_root": None,
+                    "shortener_untrusted": True,
+                    "reason": "Unresolvable or cloaked shortened link destination",
                 }
 
             # Resolve registered root domain (handling .com.ph, .edu.ph, etc.)
@@ -922,7 +1028,7 @@ class EnhancedAhoCorasick:
         Runs incoming text across Layers 1-4, calculates unified risk scores,
         and falls back to Layer 5 if no patterns match.
         """
-        clean_text = self._normalize(text)
+        clean_text = self._normalize(self._remove_whitelisted_urls(text))
         results = []
         reported = set()  # Tracks (pattern_index, position) to avoid duplicate alerts
 
@@ -1113,6 +1219,39 @@ class EnhancedAhoCorasick:
                     },
                 })
 
+        # A risky shortener must be a detection in its own right. Its multiplier
+        # cannot raise risk when the message contains only the URL and no keywords.
+        if (
+            url_info["segment"] == "shortener"
+            and not url_info.get("is_whitelisted", False)
+        ):
+            expanded_url = url_info.get("expanded_url", "")
+            shortener_detection_exists = any(
+                item.get("match_type") == "url_shortener"
+                for item in results
+            )
+            if not shortener_detection_exists:
+                results.append({
+                    "alert": "CRITICAL: Unverified shortened URL detected!",
+                    "risk_score": self.SEGMENT_RISK["shortener"],
+                    "match_type": "url_shortener",
+                    "error_count": 0,
+                    "context": text[:120].lower().strip(),
+                    "signals": ["unverified shortened URL"],
+                    "score_breakdown": {
+                        "match_layer": "URL shortener destination analysis",
+                        "token_score": 0.0,
+                        "pattern": "UNVERIFIED_SHORTENER",
+                        "matched_text": expanded_url or text[:120],
+                        "proximity_delta": 0.0,
+                        "url_multiplier": self.SEGMENT_RISK["shortener"],
+                        "url_segment": "shortener",
+                        "is_whitelisted": False,
+                        "penalty": 0.0,
+                        "final_risk": self.SEGMENT_RISK["shortener"],
+                    },
+                })
+
         return results
 
     # -------------------------------------------------------------------------
@@ -1263,64 +1402,134 @@ class EnhancedAhoCorasick:
         })
         return assessment
 
-    def _unshorten_url(self, shortened_url, timeout=2.0):
+    def _unshorten_url(self, shortened_url, timeout=2.0, retries=2):
         """
-        Resolve redirects and read shortener preview pages without executing page scripts.
+        Capture shortener redirects without requesting their destination, or read
+        preview pages without executing scripts. Retry transient network errors,
+        but never retry HTTP responses such as 403.
         """
-        target = shortened_url if shortened_url.startswith(('http://', 'https://')) else f"http://{shortened_url}"
+        target = shortened_url if shortened_url.startswith(('http://', 'https://')) else f"https://{shortened_url}"
+        shortener_hosts = tuple(host.lower() for host in self.URL_SHORTENERS)
 
-        try:
-            req = Request(
-                target,
-                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'},
-                method='GET',
+        def is_shortener(host):
+            return any(
+                host == shortener or host.endswith("." + shortener)
+                for shortener in shortener_hosts
             )
 
-            tls_context = ssl.create_default_context(cafile=certifi.where())
-            with urlopen(req, timeout=timeout, context=tls_context) as response:
-                resolved_url = response.geturl()
-                resolved_host = (urlsplit(resolved_url).hostname or "").lower()
-                if resolved_host and not any(
-                    resolved_host == shortener or resolved_host.endswith("." + shortener)
-                    for shortener in self.URL_SHORTENERS
-                ):
-                    return resolved_url
+        for attempt in range(retries + 1):
+            try:
+                tls_context = ssl.create_default_context(cafile=certifi.where())
+                current_target = target
+                for _ in range(5):
+                    redirect_handler = _LocationCaptureRedirectHandler()
+                    opener = build_opener(
+                        HTTPSHandler(context=tls_context),
+                        redirect_handler,
+                    )
+                    req = Request(
+                        current_target,
+                        headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'},
+                        method='GET',
+                    )
 
-                page = response.read(256 * 1024).decode("utf-8", errors="replace")
-                parser = _DestinationLinkParser()
-                parser.feed(page)
+                    try:
+                        response = opener.open(req, timeout=timeout)
+                    except HTTPError as exc:
+                        location = redirect_handler.redirect_url or exc.headers.get("Location")
+                        if not (300 <= exc.code < 400 and location):
+                            raise
 
-                shortener_host = (urlsplit(target).hostname or "").lower()
-                for href, label in parser.links:
-                    for candidate in (href, label):
-                        candidate = candidate.strip().strip(" \t\r\n<>\"'.,;)")
-                        if not candidate:
-                            continue
-                        if candidate.startswith("//"):
-                            candidate = "https:" + candidate
-                        elif not urlsplit(candidate).scheme:
-                            candidate = "https://" + candidate
+                        resolved_url = urljoin(current_target, location)
+                        parsed_destination = urlsplit(resolved_url)
+                        if parsed_destination.scheme not in ("http", "https") or not parsed_destination.hostname:
+                            logger.warning(
+                                "[URL analysis] Shortener returned an invalid redirect target for %s",
+                                shortened_url,
+                            )
+                            return shortened_url
 
-                        parsed = urlsplit(candidate)
-                        candidate_host = (parsed.hostname or "").lower()
-                        if not candidate_host or candidate_host == shortener_host:
+                        destination_host = parsed_destination.hostname.lower()
+                        if is_shortener(destination_host):
+                            current_target = resolved_url
                             continue
-                        if any(
-                            candidate_host == shortener or candidate_host.endswith("." + shortener)
-                            for shortener in self.URL_SHORTENERS
-                        ):
-                            continue
+
                         logger.info(
-                            "[URL analysis] Destination extracted from preview page: %s",
-                            candidate,
+                            "[URL analysis] Destination captured from redirect: %s",
+                            resolved_url,
                         )
-                        return candidate
+                        return resolved_url
 
-                return resolved_url
-        except (URLError, TimeoutError) as exc:
-            logger.warning(
-                "[URL analysis] Could not expand %s: %s",
-                shortened_url,
-                exc,
-            )
-            return shortened_url
+                    with response:
+                        resolved_url = response.geturl()
+                        resolved_host = (urlsplit(resolved_url).hostname or "").lower()
+                        if resolved_host and not is_shortener(resolved_host):
+                            return resolved_url
+
+                        page = response.read(256 * 1024).decode("utf-8", errors="replace")
+                        parser = _DestinationLinkParser()
+                        parser.feed(page)
+
+                        shortener_host = (urlsplit(current_target).hostname or "").lower()
+                        for href, label in parser.links:
+                            for candidate in (href, label):
+                                candidate = candidate.strip().strip(" \t\r\n<>\"'.,;)")
+                                if not candidate:
+                                    continue
+                                if candidate.startswith("//"):
+                                    candidate = "https:" + candidate
+                                elif not urlsplit(candidate).scheme:
+                                    candidate = "https://" + candidate
+
+                                parsed = urlsplit(candidate)
+                                candidate_host = (parsed.hostname or "").lower()
+                                if not candidate_host or candidate_host == shortener_host:
+                                    continue
+                                if is_shortener(candidate_host):
+                                    continue
+                                logger.info(
+                                    "[URL analysis] Destination extracted from preview page: %s",
+                                    candidate,
+                                )
+                                return candidate
+
+                        return resolved_url
+
+                logger.warning(
+                    "[URL analysis] Too many shortener redirects for %s",
+                    shortened_url,
+                )
+                return shortened_url
+            except HTTPError as exc:
+                logger.warning(
+                    "[URL analysis] Shortener refused expansion for %s: HTTP %s",
+                    shortened_url,
+                    exc.code,
+                )
+                return shortened_url
+            except (URLError, TimeoutError, ConnectionError) as exc:
+                reason = exc.reason if isinstance(exc, URLError) else exc
+                transient = isinstance(
+                    reason,
+                    (socket.gaierror, socket.timeout, TimeoutError, ConnectionError),
+                )
+                if transient and attempt < retries:
+                    logger.warning(
+                        "[URL analysis] Temporary network error expanding %s "
+                        "(attempt %s/%s): %s; retrying",
+                        shortened_url,
+                        attempt + 1,
+                        retries + 1,
+                        exc,
+                    )
+                    time.sleep(0.25 * (attempt + 1))
+                    continue
+
+                logger.warning(
+                    "[URL analysis] Could not expand %s: %s",
+                    shortened_url,
+                    exc,
+                )
+                return shortened_url
+
+        return shortened_url

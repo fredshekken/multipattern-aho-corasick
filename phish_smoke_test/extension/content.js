@@ -75,10 +75,44 @@ const FB_SELECTOR = "div[dir='auto']";
 const FB_SKIP = 'a, [role="navigation"], [role="banner"], [role="complementary"], [role="textbox"], [contenteditable="true"]';
 
 const SELECTOR = IS_FB ? FB_SELECTOR : TELEGRAM_SELECTOR;
+const BLOCK_TEXT_TAGS = new Set([
+  "ADDRESS", "ARTICLE", "BLOCKQUOTE", "DIV", "FIGCAPTION", "H1", "H2", "H3",
+  "H4", "H5", "H6", "LI", "P", "PRE", "SECTION"
+]);
 
 function isWhitelistedUrlOnly(text) {
   const clean = text.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
   return TRUSTED_DOMAINS.some(domain => clean === domain || clean.endsWith("." + domain));
+}
+
+function extractMessageText(root) {
+  const parts = [];
+
+  function visit(node) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      parts.push(node.nodeValue || "");
+      return;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+
+    const isBlock = BLOCK_TEXT_TAGS.has(node.tagName);
+    const isLink = node.tagName === "A";
+    if (isBlock || isLink || node.tagName === "BR") parts.push("\n");
+
+    if (isLink) {
+      const label = node.innerText?.trim() || node.textContent?.trim() || "";
+      const href = node.href?.trim() || "";
+      if (label) parts.push(label);
+      if (href && href !== label) parts.push(` ${href}`);
+    } else if (node.tagName !== "BR") {
+      node.childNodes.forEach(visit);
+    }
+
+    if (isBlock || isLink || node.tagName === "BR") parts.push("\n");
+  }
+
+  visit(root);
+  return parts.join("").replace(/[ \t]+\n/g, "\n").replace(/\n[ \t]+/g, "\n").trim();
 }
 
 // On Messenger, skip the message box, sidebar previews, and link cards.
@@ -138,7 +172,7 @@ async function inspectBubble(node) {
     timeElement.remove();
   }
 
-  const text = clone.innerText?.trim();
+  const text = extractMessageText(clone);
   // Filter out empty bubbles or single-word meta status timestamps
   if (!text || text.length < 4) return;
 
