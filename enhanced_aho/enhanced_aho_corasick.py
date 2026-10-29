@@ -2,6 +2,7 @@ import logging
 import re
 import socket
 import ssl
+import threading
 import time
 from collections import deque
 from html.parser import HTMLParser
@@ -70,7 +71,9 @@ class EnhancedAhoCorasick:
 
     def __init__(self, patterns, max_errors=1, anomaly_threshold=0.45,
                  exact_threshold=1.2, fuzzy_threshold=1.2, affix_threshold=1.05,
-                 warning_threshold=1.142, min_evidence=0):
+                 warning_threshold=1.142, min_evidence=0,
+                 resolve_shorteners=True, url_trace=True,
+                 flag_lookalike_domains=True):
         """
         WHERE IT ENTERS THE ALGO:
         This is the constructor. It runs once when the engine starts.
@@ -96,6 +99,23 @@ class EnhancedAhoCorasick:
         # so the default behaves exactly like the pre-gate engine.
         self.warning_threshold = warning_threshold
         self.min_evidence = min_evidence
+
+        # Shortened-link resolution (network). When False, a shortener is never
+        # contacted and is treated as an unresolved, unverified link. Use False
+        # for offline or reproducible benchmark runs.
+        self.resolve_shorteners = resolve_shorteners
+        # Print the step-by-step URL analysis trace to the terminal (used for
+        # demos and checked by the tests). Set False to silence it, for example
+        # in large benchmark runs.
+        self.url_trace = url_trace
+
+        # Lookalike-domain check (ON by default). When True, a brand
+        # name inside a registered domain that is NOT the brand's verified domain
+        # (gcash-verify.xyz) is treated as brand spoofing and gets the 'lookalike'
+        # multiplier. False = the older behavior (such a domain gets 1.0x).
+        self.flag_lookalike_domains = flag_lookalike_domains
+        self._shortener_cache = {}
+        self._shortener_lock = threading.Lock()
 
         # Parse and flatten the incoming dictionary into a single pattern list
         self.pattern_groups = self._normalize_pattern_groups(patterns)
@@ -287,7 +307,9 @@ class EnhancedAhoCorasick:
     @classmethod
     def from_pattern_file(cls, pattern_file, max_errors=1, anomaly_threshold=0.45,
                            exact_threshold=1.2, fuzzy_threshold=1.2, affix_threshold=1.05,
-                           warning_threshold=1.142, min_evidence=0):
+                           warning_threshold=1.142, min_evidence=0,
+                           resolve_shorteners=True, url_trace=True,
+                           flag_lookalike_domains=True):
         """
         WHERE IT ENTERS:
         Alternative factory constructor used by server.py to instantiate the engine
@@ -303,7 +325,9 @@ class EnhancedAhoCorasick:
         return cls(patterns, max_errors=max_errors, anomaly_threshold=anomaly_threshold,
                    exact_threshold=exact_threshold, fuzzy_threshold=fuzzy_threshold,
                    affix_threshold=affix_threshold,
-                   warning_threshold=warning_threshold, min_evidence=min_evidence)
+                   warning_threshold=warning_threshold, min_evidence=min_evidence,
+                   resolve_shorteners=resolve_shorteners, url_trace=url_trace,
+                   flag_lookalike_domains=flag_lookalike_domains)
 
     def _normalize_pattern_groups(self, patterns):
         """Deduplicates and cleans keyword strings across pattern categories."""
@@ -780,7 +804,12 @@ class EnhancedAhoCorasick:
         "lazada.com.ph",
         "grab.com",
         "viber.com",
-        "telegram.org"
+        "telegram.org",
+        "paypal.com",
+        "amazon.com",
+        "whatsapp.com",
+        "paypal.me",
+        "lazada.com"
     }
 
     # Segment multipliers based on where a brand keyword appears
@@ -789,10 +818,24 @@ class EnhancedAhoCorasick:
         'subdomain':   2.0,  # Brand in subdomain indicates spoofing: 2.0x multiplier
         'path':        1.5,  # Brand in path/folder: 1.5x multiplier
         'query':       1.5,  # Brand in query parameter: 1.5x multiplier
+        'lookalike':   2.0,  # Brand in a non-verified domain (optional check): same value as 'subdomain'
         'sld':         1.0,  # Brand in registered domain (likely legitimate): 1.0x (no escalation)
         'whitelisted': 1.0,  # Authenticated registered root domain: 1.0x baseline
         'none':        1.0,  # Match is regular text outside any URL: 1.0x
     }
+
+    # One URL pattern shared by every URL step (masking and risk analysis).
+    URL_PATTERN = r'(?:https?://|www\.)\S+|\b(?:[a-z0-9-]+\.)+[a-z]{2,}(?:/\S*)?'
+
+    # At most this many shortened links are contacted per message. Extra
+    # shorteners are NOT skipped: they are treated as unresolved (still risky).
+    MAX_SHORTENER_LOOKUPS = 3
+
+    # Resolution cache: a resolved link is remembered for an hour, a failed
+    # lookup for one minute (so a brief outage is retried soon).
+    SHORTENER_CACHE_TTL_OK = 3600
+    SHORTENER_CACHE_TTL_FAIL = 60
+    SHORTENER_CACHE_MAX = 2048
 
     def _segment_url(self, url):
         """
@@ -811,6 +854,8 @@ class EnhancedAhoCorasick:
             rest, query = rest.split('?', 1)
         if '/' in rest:
             rest, path = rest.split('/', 1)
+        # Drop an explicit port (gcash.com:8443) so it cannot hide the domain
+        rest = re.sub(r':\d{1,5}$', '', rest)
 
         # Step 3: Split hostname on delimiter '.'
         host_parts = rest.split('.')
@@ -878,8 +923,6 @@ class EnhancedAhoCorasick:
         return current_url
 
     def _remove_whitelisted_urls(self, text):
-        url_pattern = r'(?:https?://|www\.)\S+|\b(?:[a-z0-9-]+\.)+[a-z]{2,}(?:/\S*)?'
-
         def replace_url(match):
             candidate = match.group().rstrip(".,;:!?)]}")
             segments = self._segment_url(candidate)
@@ -887,89 +930,130 @@ class EnhancedAhoCorasick:
                 return match.group()
             return "".join("\n" if char == "\n" else " " for char in match.group())
 
-        return re.sub(url_pattern, replace_url, text, flags=re.IGNORECASE)
+        return re.sub(self.URL_PATTERN, replace_url, text, flags=re.IGNORECASE)
 
-    def _analyze_url(self, text):
+    def _trace(self, message):
+        if self.url_trace:
+            print(message, flush=True)
+
+    def _resolve_shortener(self, url):
         """
-        WHERE IT ENTERS:
-        Called at the start of enhanced_search.
-        Locates any URLs in the message, segments them, checks whitelists,
-        and calculates the risk multiplier.
+        Resolves a shortened link, with a small in-memory cache and an on/off switch.
+        Returns the destination URL, or the same url when it could not be resolved
+        (or when resolve_shorteners is False).
         """
-        url_pattern = r'(?:https?://|www\.)\S+|\b(?:[a-z0-9-]+\.)+[a-z]{2,}(?:/\S*)?'
-        norm_patterns = self.norm_patterns
+        if not self.resolve_shorteners:
+            return url
 
-        for m in re.finditer(url_pattern, text, re.IGNORECASE):
-            url = m.group()
-            segments = self._segment_url(url)
+        now = time.monotonic()
+        with self._shortener_lock:
+            cached = self._shortener_cache.get(url)
+            if cached and cached[1] > now:
+                return cached[0]
 
-            # Check if domain matches known URL shortener list
-            full_host = '.'.join(
-                segments['subdomains'] + [segments['sld'], segments['tld']]
-            ).lower()
-            if any(
-                full_host == shortener or full_host.endswith("." + shortener)
-                for shortener in self.URL_SHORTENERS
-            ):
-                print(f"[URL analysis] Shortener detected: {url}", flush=True)
-                expanded_url = self._unshorten_url(url)
-                if expanded_url != url:
-                    expanded_url = self._unwrap_tracking_redirect(expanded_url)
-                    expanded_segments = self._segment_url(expanded_url)
-                    expanded_root = self._registered_root_domain(expanded_segments)
-                    is_dest_trusted = expanded_root in self.LEGITIMATE_DOMAINS
-                    print(
-                        f"[URL analysis] Successfully unmasked: {url} -> {expanded_url}",
-                        flush=True,
-                    )
-                    print(
-                        f"[URL analysis] Resolved root: {expanded_root or '(unknown)'} "
-                        f"| Whitelisted: {is_dest_trusted}",
-                        flush=True,
-                    )
-                    if is_dest_trusted:
-                        print(
-                            f"[URL analysis] Destination is verified legitimate "
-                            f"({expanded_root}). Suppressing shortener risk.",
-                            flush=True,
-                        )
-                        return {
-                            "multiplier": self.SEGMENT_RISK['whitelisted'],
-                            "segment": "sld",
-                            "is_whitelisted": True,
-                            "url": url,
-                            "expanded_url": expanded_url,
-                            "unmasked_url": expanded_url,
-                            "unmasked_root": expanded_root,
-                            "shortener_untrusted": False,
-                        }
+        result = self._unshorten_url(url)  # network call, kept outside the lock
 
-                    print(
-                        f"[URL analysis] Alert: Unmasked destination "
-                        f"({expanded_root or '(unknown)'}) is NOT in the trusted "
-                        f"whitelist. Retaining shortener risk "
-                        f"({self.SEGMENT_RISK['shortener']}x).",
-                        flush=True,
+        ttl = (self.SHORTENER_CACHE_TTL_OK if result != url
+               else self.SHORTENER_CACHE_TTL_FAIL)
+        with self._shortener_lock:
+            if len(self._shortener_cache) >= self.SHORTENER_CACHE_MAX:
+                self._shortener_cache.pop(next(iter(self._shortener_cache)))
+            self._shortener_cache[url] = (result, now + ttl)
+        return result
+
+    # Brand words too generic to prove a lookalike domain (mybank.com is not spoofing).
+    GENERIC_BRAND_TERMS = {"bank"}
+
+    # Brand names shorter than this must match a WHOLE word in the domain name
+    # (bdo-verify.xyz), not any substring (abdomen.com).
+    LOOKALIKE_SUBSTRING_MIN_LEN = 5
+
+    def _brand_in_domain_name(self, root_domain):
+        """
+        True when a dictionary brand name appears inside the registered domain name
+        (the part before the public suffix). Only brand_terms count, never the
+        generic dictionary words, so login-help.com or accountmanager.com are not
+        treated as brand spoofing.
+        """
+        label = (root_domain or "").split(".")[0].lower()
+        if not label:
+            return False
+        norm_label = self._normalize(label)
+        tokens = {self._normalize(t) for t in re.split(r"[^a-z0-9]+", label) if t}
+        for brand in self.pattern_groups.get("brand_terms", []):
+            if brand.lower() in self.GENERIC_BRAND_TERMS:
+                continue
+            norm_brand = self._normalize(brand)
+            if not norm_brand:
+                continue
+            if len(norm_brand) >= self.LOOKALIKE_SUBSTRING_MIN_LEN:
+                if norm_brand in norm_label:
+                    return True
+            elif norm_brand in tokens:
+                return True
+        return False
+
+    def _classify_url(self, url, lookup_budget):
+        """
+        Classifies ONE URL.
+        Returns a result dict, or None when the URL carries no risk signal
+        (not a shortener, not whitelisted, and no dictionary keyword inside it).
+        lookup_budget is a one-item list holding how many shortener lookups remain
+        for the current message.
+        """
+        segments = self._segment_url(url)
+
+        # Check if domain matches known URL shortener list
+        full_host = '.'.join(
+            segments['subdomains'] + [segments['sld'], segments['tld']]
+        ).lower()
+        if any(
+            full_host == shortener or full_host.endswith("." + shortener)
+            for shortener in self.URL_SHORTENERS
+        ):
+            self._trace(f"[URL analysis] Shortener detected: {url}")
+            if lookup_budget[0] > 0:
+                lookup_budget[0] -= 1
+                expanded_url = self._resolve_shortener(url)
+            else:
+                self._trace(
+                    f"[URL analysis] Lookup limit reached; not resolving: {url}"
+                )
+                expanded_url = url
+
+            if expanded_url != url:
+                expanded_url = self._unwrap_tracking_redirect(expanded_url)
+                expanded_segments = self._segment_url(expanded_url)
+                expanded_root = self._registered_root_domain(expanded_segments)
+                is_dest_trusted = expanded_root in self.LEGITIMATE_DOMAINS
+                self._trace(
+                    f"[URL analysis] Successfully unmasked: {url} -> {expanded_url}"
+                )
+                self._trace(
+                    f"[URL analysis] Resolved root: {expanded_root or '(unknown)'} "
+                    f"| Whitelisted: {is_dest_trusted}"
+                )
+                if is_dest_trusted:
+                    self._trace(
+                        f"[URL analysis] Destination is verified legitimate "
+                        f"({expanded_root}). Suppressing shortener risk."
                     )
                     return {
-                        "multiplier": self.SEGMENT_RISK['shortener'],
-                        "segment": "shortener",
-                        "is_whitelisted": False,
+                        "multiplier": self.SEGMENT_RISK['whitelisted'],
+                        "segment": "sld",
+                        "is_whitelisted": True,
                         "url": url,
                         "expanded_url": expanded_url,
                         "unmasked_url": expanded_url,
                         "unmasked_root": expanded_root,
-                        "shortener_untrusted": True,
-                        "reason": (
-                            "Shortened link reveals untrusted destination: "
-                            f"{expanded_root or '(unknown)'}"
-                        ),
+                        "shortener_untrusted": False,
                     }
 
-                print(
-                    f"[URL analysis] Destination could not be resolved; "
-                    f"retaining shortener risk: {url}",
-                    flush=True,
+                self._trace(
+                    f"[URL analysis] Alert: Unmasked destination "
+                    f"({expanded_root or '(unknown)'}) is NOT in the trusted "
+                    f"whitelist. Retaining shortener risk "
+                    f"({self.SEGMENT_RISK['shortener']}x)."
                 )
                 return {
                     "multiplier": self.SEGMENT_RISK['shortener'],
@@ -977,45 +1061,93 @@ class EnhancedAhoCorasick:
                     "is_whitelisted": False,
                     "url": url,
                     "expanded_url": expanded_url,
-                    "unmasked_url": None,
-                    "unmasked_root": None,
+                    "unmasked_url": expanded_url,
+                    "unmasked_root": expanded_root,
                     "shortener_untrusted": True,
-                    "reason": "Unresolvable or cloaked shortened link destination",
+                    "reason": (
+                        "Shortened link reveals untrusted destination: "
+                        f"{expanded_root or '(unknown)'}"
+                    ),
                 }
 
-            # Resolve registered root domain (handling .com.ph, .edu.ph, etc.)
-            root_domain = self._registered_root_domain(segments)
-
-            # Check if domain is in the verified legitimate institutions whitelist
-            is_whitelisted = root_domain in self.LEGITIMATE_DOMAINS
-            logger.info(
-                "[URL analysis] URL: %s | registered root: %s | classification: %s",
-                url,
-                root_domain or "(unknown)",
-                "whitelisted" if is_whitelisted else "unverified",
+            self._trace(
+                f"[URL analysis] Destination could not be resolved; "
+                f"retaining shortener risk: {url}"
             )
+            return {
+                "multiplier": self.SEGMENT_RISK['shortener'],
+                "segment": "shortener",
+                "is_whitelisted": False,
+                "url": url,
+                "expanded_url": expanded_url,
+                "unmasked_url": None,
+                "unmasked_root": None,
+                "shortener_untrusted": True,
+                "reason": "Unresolvable or cloaked shortened link destination",
+            }
 
-            # If registered root is whitelisted, return baseline immediately
-            if is_whitelisted:
-                return {"multiplier": self.SEGMENT_RISK['whitelisted'], "segment": "sld", "is_whitelisted": True}
+        # Resolve registered root domain (handling .com.ph, .edu.ph, etc.)
+        root_domain = self._registered_root_domain(segments)
 
-            # Check where pattern keywords fall inside URL components
-            for norm_p in norm_patterns:
-                # Subdomain: Brand spoofing attempt (brand token present in subdomain while not whitelisted)
-                if any(norm_p in self._normalize(sub) for sub in segments['subdomains']):
-                    return {"multiplier": self.SEGMENT_RISK['subdomain'], "segment": "subdomain", "is_whitelisted": False}
+        # Check if domain is in the verified legitimate institutions whitelist
+        is_whitelisted = root_domain in self.LEGITIMATE_DOMAINS
+        logger.info(
+            "[URL analysis] URL: %s | registered root: %s | classification: %s",
+            url,
+            root_domain or "(unknown)",
+            "whitelisted" if is_whitelisted else "unverified",
+        )
 
-                # Path or Query: Moderate risk
-                if norm_p in self._normalize(segments['path']):
-                    return {"multiplier": self.SEGMENT_RISK['path'], "segment": "path", "is_whitelisted": False}
-                if norm_p in self._normalize(segments['query']):
-                    return {"multiplier": self.SEGMENT_RISK['query'], "segment": "query", "is_whitelisted": False}
+        # If registered root is whitelisted, return baseline immediately
+        if is_whitelisted:
+            return {"multiplier": self.SEGMENT_RISK['whitelisted'], "segment": "sld", "is_whitelisted": True}
 
-                # SLD: Brand owns the domain
-                if norm_p in self._normalize(segments['sld']):
-                    return {"multiplier": self.SEGMENT_RISK['sld'], "segment": "sld", "is_whitelisted": is_whitelisted}
+        # Optional: a brand name inside a domain that is not the brand's verified
+        # domain is a lookalike (brand spoofing).
+        if self.flag_lookalike_domains and self._brand_in_domain_name(root_domain):
+            self._trace(
+                f"[URL analysis] Lookalike brand domain (not whitelisted): {root_domain}"
+            )
+            return {"multiplier": self.SEGMENT_RISK['lookalike'], "segment": "lookalike", "is_whitelisted": False}
 
-        return {"multiplier": self.SEGMENT_RISK['none'], "segment": "none", "is_whitelisted": False}
+        # Check where pattern keywords fall inside URL components
+        for norm_p in self.norm_patterns:
+            # Subdomain: Brand spoofing attempt (brand token present in subdomain while not whitelisted)
+            if any(norm_p in self._normalize(sub) for sub in segments['subdomains']):
+                return {"multiplier": self.SEGMENT_RISK['subdomain'], "segment": "subdomain", "is_whitelisted": False}
+
+            # Path or Query: Moderate risk
+            if norm_p in self._normalize(segments['path']):
+                return {"multiplier": self.SEGMENT_RISK['path'], "segment": "path", "is_whitelisted": False}
+            if norm_p in self._normalize(segments['query']):
+                return {"multiplier": self.SEGMENT_RISK['query'], "segment": "query", "is_whitelisted": False}
+
+            # SLD: Brand owns the domain
+            if norm_p in self._normalize(segments['sld']):
+                return {"multiplier": self.SEGMENT_RISK['sld'], "segment": "sld", "is_whitelisted": is_whitelisted}
+
+        return None
+
+    def _analyze_url(self, text):
+        """
+        WHERE IT ENTERS:
+        Called once at the start of assess_message / enhanced_search.
+        Locates EVERY URL in the message, classifies each one, and returns the
+        result for the riskiest URL: the highest multiplier wins, and on a tie a
+        non-whitelisted result wins. A whitelisted link therefore cannot hide a
+        shortened or spoofed link elsewhere in the same message.
+        """
+        lookup_budget = [self.MAX_SHORTENER_LOOKUPS]
+        results = []
+        for m in re.finditer(self.URL_PATTERN, text, re.IGNORECASE):
+            info = self._classify_url(m.group(), lookup_budget)
+            if info is not None:
+                results.append(info)
+
+        if not results:
+            return {"multiplier": self.SEGMENT_RISK['none'], "segment": "none", "is_whitelisted": False}
+
+        return max(results, key=lambda info: (info["multiplier"], not info["is_whitelisted"]))
 
     # -------------------------------------------------------------------------
     # MASTER SCAN FUNCTION: Coordinates All Detection Layers
@@ -1295,7 +1427,7 @@ class EnhancedAhoCorasick:
 
     # URL segments that count as risky. 'sld' (brand owns the registered domain)
     # and 'none' do NOT count, so an exact trusted-looking domain adds no evidence.
-    RISKY_URL_SEGMENTS = {"shortener", "subdomain", "path", "query"}
+    RISKY_URL_SEGMENTS = {"shortener", "subdomain", "path", "query", "lookalike"}
 
     def _evidence_groups(self, text, detections, analyzed_url=None):
         """Returns the set of independent evidence groups present in the message."""

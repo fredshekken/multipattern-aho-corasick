@@ -18,6 +18,11 @@ const TIER_DISPLAY = {
 // Set to 1 to show every Tier 2 message.
 const TIER2_MIN_EVIDENCE = 2;
 
+// A link on its own is not proof of phishing. When URL risk is the ONLY kind of
+// evidence on a Tier 3 message, show this quieter mode instead of the red banner.
+// Set to "banner" to always show the red banner for Tier 3.
+const URL_ONLY_TIER3_MODE = "collapsed";
+
 const BACKEND_URL = "http://127.0.0.1:8000/scan";
 const FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
 const UI_CLASS = "phish-shield-ui";
@@ -188,6 +193,12 @@ async function inspectBubble(node) {
   }
 }
 
+function urlOnlyEvidence(data) {
+  return Array.isArray(data.evidence_groups) &&
+    data.evidence_groups.length === 1 &&
+    data.evidence_groups[0] === "url_risk";
+}
+
 function evidenceCount(data) {
   // If an older backend does not send evidence groups, do not hide anything.
   return Array.isArray(data.evidence_groups) ? data.evidence_groups.length : Infinity;
@@ -223,6 +234,9 @@ function renderResult(node, data) {
   let mode = TIER_DISPLAY[data.tier] || "none";
   if (data.tier === 2 && evidenceCount(data) < TIER2_MIN_EVIDENCE) {
     mode = "none";
+  }
+  if (data.tier >= 3 && urlOnlyEvidence(data)) {
+    mode = URL_ONLY_TIER3_MODE;
   }
 
   if (mode === "none") {

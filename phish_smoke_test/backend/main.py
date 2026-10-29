@@ -34,7 +34,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-engine = EnhancedAhoCorasick.from_pattern_file(_find_pattern_file())
+# Lookalike-domain check is ON by default. Turn it off with PHISH_LOOKALIKE_DOMAINS=0
+engine = EnhancedAhoCorasick.from_pattern_file(
+    _find_pattern_file(),
+    flag_lookalike_domains=os.environ.get("PHISH_LOOKALIKE_DOMAINS", "1") == "1",
+)
 
 
 class MessagePayload(BaseModel):

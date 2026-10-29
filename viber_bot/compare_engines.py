@@ -120,6 +120,11 @@ def main():
     parser.add_argument("--label-col", default="label")
     parser.add_argument("--positive-label", default="phishing")
     parser.add_argument("--pattern-file", default=DEFAULT_PATTERN_FILE)
+    parser.add_argument("--no-lookalike-domains", action="store_true",
+                        help="Turn OFF the lookalike-domain check (gcash-verify.xyz). It is ON by default.")
+    parser.add_argument("--flag-lookalike-domains", action="store_true", help=argparse.SUPPRESS)  # old option, now the default
+    parser.add_argument("--no-resolve-shorteners", action="store_true",
+                        help="Do not contact shortened links (offline, reproducible run).")
     parser.add_argument("--max-text-chars", type=int, default=None,
                          help="Truncate each message to this many characters before "
                               "scanning (applied identically to both engines). Useful "
@@ -138,7 +143,14 @@ def main():
               f"(replace with your real Kaggle CSVs for actual thesis numbers).")
 
     baseline = BaselineAhoCorasick.from_pattern_file(args.pattern_file)
-    enhanced = EnhancedAhoCorasick.from_pattern_file(args.pattern_file)
+    enhanced = EnhancedAhoCorasick.from_pattern_file(
+        args.pattern_file,
+        resolve_shorteners=not args.no_resolve_shorteners,
+        flag_lookalike_domains=not args.no_lookalike_domains,
+    )
+    print("Lookalike-domain check:", "OFF" if args.no_lookalike_domains else "ON")
+    print("Shortener resolution:",
+          "OFF (offline run)" if args.no_resolve_shorteners else "ON (live network)")
 
     baseline_metrics = evaluate(baseline, dataset, baseline_predict)
     enhanced_metrics = evaluate(enhanced, dataset, enhanced_predict)

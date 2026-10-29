@@ -472,6 +472,202 @@ def test_o4_brand_in_path(scanner):
 
 
 # ============================================================
+#  O4 -- URL analysis: worst URL decides, ports, lookup limit,
+#        cache, offline switch
+# ============================================================
+
+def build_quiet_scanner(**kwargs):
+    return EnhancedAhoCorasick(PATTERNS, max_errors=1, url_trace=False, **kwargs)
+
+
+def _same_url(url, *args, **kwargs):
+    """Stand-in resolver: the shortened link could not be resolved."""
+    return url
+
+
+def test_o4_worst_url_decides_when_whitelisted_link_comes_first():
+    scanner = build_quiet_scanner()
+    with patch.object(scanner, "_unshorten_url", side_effect=_same_url):
+        shortener_after = scanner._analyze_url(
+            "See https://gcash.com/help then https://bit.ly/abc123"
+        )
+        spoof_after = scanner._analyze_url(
+            "See https://gcash.com/help then https://gcash.com.verify-now.xyz/login"
+        )
+    assert shortener_after["segment"] == "shortener"
+    assert not shortener_after["is_whitelisted"]
+    assert spoof_after["segment"] == "subdomain"
+    assert not spoof_after["is_whitelisted"]
+    print("  [OK] A whitelisted link first does not hide a shortener or spoof after it.")
+
+
+def test_o4_all_whitelisted_links_stay_clean():
+    scanner = build_quiet_scanner()
+    result = scanner._analyze_url("https://gcash.com/help and https://www.bpi.com.ph/security")
+    assert result["is_whitelisted"]
+    assert result["multiplier"] == scanner.SEGMENT_RISK["whitelisted"]
+    print("  [OK] Several whitelisted links remain clean.")
+
+
+def test_o4_port_number_does_not_break_whitelist():
+    scanner = build_quiet_scanner()
+    official = scanner._analyze_url("https://gcash.com:8443/help")
+    spoof = scanner._analyze_url("https://gcash.com.verify-now.xyz:8443/login")
+    assert official["is_whitelisted"]
+    assert spoof["segment"] == "subdomain" and not spoof["is_whitelisted"]
+    print("  [OK] A port number neither breaks the whitelist nor hides a spoof.")
+
+
+def test_o4_userinfo_trick_is_not_whitelisted():
+    scanner = build_quiet_scanner()
+    result = scanner._analyze_url("https://gcash.com@evil-site.xyz/login")
+    assert not result["is_whitelisted"]
+    print("  [OK] gcash.com@evil-site.xyz is not treated as the official domain.")
+
+
+def test_o4_shortener_lookup_limit_keeps_extra_links_risky():
+    scanner = build_quiet_scanner()
+    text = " ".join(f"https://bit.ly/link{i}" for i in range(6))
+    with patch.object(scanner, "_unshorten_url", side_effect=_same_url) as unshorten:
+        result = scanner._analyze_url(text)
+    assert unshorten.call_count == scanner.MAX_SHORTENER_LOOKUPS
+    assert result["segment"] == "shortener" and result["shortener_untrusted"]
+    print(f"  [OK] At most {scanner.MAX_SHORTENER_LOOKUPS} lookups per message; the rest stay risky.")
+
+
+def test_o4_extra_shorteners_cannot_hide_behind_trusted_ones():
+    scanner = build_quiet_scanner()
+    text = " ".join(f"https://bit.ly/trusted{i}" for i in range(4))
+    with patch.object(scanner, "_unshorten_url", return_value="https://www.bpi.com.ph/x"):
+        result = scanner._analyze_url(text)
+    # three links resolve to a trusted bank; the fourth is beyond the limit and stays risky
+    assert result["segment"] == "shortener" and result["shortener_untrusted"]
+    print("  [OK] A shortener past the lookup limit still counts as risky.")
+
+
+def test_o4_shortener_resolution_is_cached():
+    scanner = build_quiet_scanner()
+    url = "https://bit.ly/cacheme"
+    with patch.object(scanner, "_unshorten_url", return_value="https://www.bpi.com.ph/x") as unshorten:
+        scanner._analyze_url(url)
+        scanner._analyze_url("again " + url)
+        assert unshorten.call_count == 1
+        # simulate an expired cache entry: the link is looked up again
+        value, _ = scanner._shortener_cache[url]
+        scanner._shortener_cache[url] = (value, 0)
+        scanner._analyze_url(url)
+        assert unshorten.call_count == 2
+    print("  [OK] A resolved link is looked up once, and again after the entry expires.")
+
+
+def test_o4_shortener_resolution_can_be_switched_off():
+    scanner = build_quiet_scanner(resolve_shorteners=False)
+    with patch.object(scanner, "_unshorten_url") as unshorten:
+        result = scanner._analyze_url("https://bit.ly/abc123")
+    unshorten.assert_not_called()
+    assert result["segment"] == "shortener" and result["shortener_untrusted"]
+    print("  [OK] With resolution off, no shortener is contacted and it stays risky.")
+
+
+def test_o4_url_trace_can_be_silenced():
+    scanner = build_quiet_scanner()
+    output = StringIO()
+    with redirect_stdout(output):
+        with patch.object(scanner, "_unshorten_url", side_effect=_same_url):
+            scanner._analyze_url("https://bit.ly/abc123")
+    assert output.getvalue() == ""
+    print("  [OK] url_trace=False prints nothing.")
+
+
+def test_o4_message_contacts_shortener_only_once():
+    scanner = build_quiet_scanner()
+    with patch.object(scanner, "_unshorten_url", side_effect=_same_url) as unshorten:
+        scanner.assess_message("Verify your gcash account now https://bit.ly/onlyonce")
+    assert unshorten.call_count == 1
+    print("  [OK] assess_message contacts a shortened link only once.")
+
+
+
+# ============================================================
+#  O4 -- Lookalike domains (optional flag) and whitelist coverage
+# ============================================================
+
+def build_lookalike_scanner(flag=True):
+    import os
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "default_patterns.txt")
+    return EnhancedAhoCorasick.from_pattern_file(
+        path, url_trace=False, flag_lookalike_domains=flag
+    )
+
+
+def build_default_scanner():
+    import os
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "default_patterns.txt")
+    return EnhancedAhoCorasick.from_pattern_file(path, url_trace=False)
+
+
+def test_o4_lookalike_check_is_on_by_default():
+    scanner = build_default_scanner()
+    assert scanner.flag_lookalike_domains is True
+    result = scanner._analyze_url("https://gcash-verify.xyz/login")
+    assert result["segment"] == "lookalike"
+    print("  [OK] The lookalike-domain check is on by default.")
+
+
+def test_o4_lookalike_check_can_be_switched_off():
+    scanner = build_lookalike_scanner(flag=False)
+    result = scanner._analyze_url("https://gcash-verify.xyz/login")
+    assert result["segment"] != "lookalike"
+    print("  [OK] With the check switched off, the older behavior is kept.")
+
+
+def test_o4_lookalike_flag_escalates_brand_in_unverified_domain():
+    scanner = build_lookalike_scanner()
+    for url in ["https://gcash-verify.xyz/login", "https://notgcash.com/login",
+                "https://gcash-verify.com.ph/login", "https://bdo-verify.xyz/x",
+                "https://grab-promo.xyz/x"]:
+        result = scanner._analyze_url(url)
+        assert result["segment"] == "lookalike", (url, result)
+        assert result["multiplier"] == scanner.SEGMENT_RISK["subdomain"]
+        assert not result["is_whitelisted"]
+    print("  [OK] Brand names inside unverified domains are flagged as lookalikes.")
+
+
+def test_o4_lookalike_flag_keeps_verified_domains_clean():
+    scanner = build_lookalike_scanner()
+    for url in ["https://gcash.com/help", "https://www.bpi.com.ph/security",
+                "https://paypal.com/help", "https://amazon.com/help",
+                "https://whatsapp.com/help", "https://paypal.me/someone",
+                "https://lazada.com/help"]:
+        result = scanner._analyze_url(url)
+        assert result["is_whitelisted"], (url, result)
+    print("  [OK] Verified brand domains stay clean, including PayPal, Amazon, WhatsApp.")
+
+
+def test_o4_lookalike_flag_ignores_generic_words_and_short_substrings():
+    scanner = build_lookalike_scanner()
+    for url in ["https://accountmanager.com", "https://mybank.com", "https://loginhelp.com",
+                "https://abdomen.com", "https://grabbing-deals.com"]:
+        result = scanner._analyze_url(url)
+        assert result["segment"] != "lookalike", (url, result)
+    print("  [OK] Generic words and short-name substrings are not treated as brand spoofing.")
+
+
+def test_o4_lookalike_counts_as_url_risk_evidence():
+    scanner = build_lookalike_scanner()
+    result = scanner.assess_message("verify your account https://gcash-verify.xyz/login")
+    assert "url_risk" in result["evidence_groups"]
+    print("  [OK] A lookalike domain is reported as URL risk evidence.")
+
+
+def test_o4_whitelist_covers_all_named_brands():
+    scanner = build_lookalike_scanner(flag=False)
+    for url in ["https://paypal.com/x", "https://amazon.com/x", "https://whatsapp.com/x"]:
+        assert scanner._analyze_url(url)["is_whitelisted"], url
+    print("  [OK] PayPal, Amazon, and WhatsApp are whitelisted.")
+
+
+# ============================================================
 #  MAIN — Run All Tests
 # ============================================================
 
@@ -509,6 +705,23 @@ if __name__ == "__main__":
     test_o4_shortener_returns_unresolved_after_retry_limit()
     test_o4_shortener_does_not_retry_http_403()
     test_o4_preview_reveals_unverified_destination_as_risky()
+    test_o4_worst_url_decides_when_whitelisted_link_comes_first()
+    test_o4_all_whitelisted_links_stay_clean()
+    test_o4_port_number_does_not_break_whitelist()
+    test_o4_userinfo_trick_is_not_whitelisted()
+    test_o4_shortener_lookup_limit_keeps_extra_links_risky()
+    test_o4_extra_shorteners_cannot_hide_behind_trusted_ones()
+    test_o4_shortener_resolution_is_cached()
+    test_o4_shortener_resolution_can_be_switched_off()
+    test_o4_url_trace_can_be_silenced()
+    test_o4_message_contacts_shortener_only_once()
+    test_o4_lookalike_check_is_on_by_default()
+    test_o4_lookalike_check_can_be_switched_off()
+    test_o4_lookalike_flag_escalates_brand_in_unverified_domain()
+    test_o4_lookalike_flag_keeps_verified_domains_clean()
+    test_o4_lookalike_flag_ignores_generic_words_and_short_substrings()
+    test_o4_lookalike_counts_as_url_risk_evidence()
+    test_o4_whitelist_covers_all_named_brands()
     test_o4_brand_in_path(scanner)
 
     print(f"\n{'='*60}")
