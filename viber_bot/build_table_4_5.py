@@ -19,10 +19,10 @@ TEST_MESSAGES = [
     "Paalala mula sa GCash: i-verify ang iyong account ngayon sa bit.ly/gcash-update",
     # Same sentence, only the shortened link changes, so any difference in S comes
     # from where the link leads:
-    #   official BPI site / lookalike of BPI / unknown site with no risk signal
-    "Paalala mula sa BPI: i-verify ang iyong account ngayon sa https://bit.ly/actualbpisece",
+    #   official BPI site / lookalike of BPI / ordinary site with no risk signal
+    "Paalala mula sa BPI: i-verify ang iyong account ngayon sa https://bit.ly/4kEZYxJ",
     "Paalala mula sa BPI: i-verify ang iyong account ngayon sa https://bit.ly/4yGX271",
-    "Paalala mula sa BPI: i-verify ang iyong account ngayon sa https://bit.ly/12Tst",
+    "Paalala mula sa BPI: i-verify ang iyong account ngayon sa https://bit.ly/4zq0cMA",
     # Direct links (no shortener)
     "Paalala: Na-block ang inyong gcash account, mag-login agad sa gcash.security-portal.com",
     "Babala: Paki-kumpirma ang detalye bago mag-login sa portal-verify.com/gcash/login",

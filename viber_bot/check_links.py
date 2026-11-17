@@ -12,13 +12,12 @@ import _bootstrap  # noqa: F401
 from compare_engines import DEFAULT_PATTERN_FILE
 from enhanced_aho_corasick import EnhancedAhoCorasick
 
+# The links used in Table 4.5
 DEFAULT_LINKS = [
-    "bit.ly/gcash-update",
-    "https://bit.ly/actualbpisece",
-    "https://bit.ly/actualbpiseceu",
-    "https://tinyurl.com/actualbpisece",
-    "https://bit.ly/4yGX271",
-    "https://bit.ly/12Tst",
+    "bit.ly/gcash-update",       # does not exist: unresolved
+    "https://bit.ly/4kEZYxJ",    # official BPI site
+    "https://bit.ly/4yGX271",    # lookalike of BPI
+    "https://bit.ly/4zq0cMA",    # ordinary site, no risk signal
 ]
 
 engine = EnhancedAhoCorasick.from_pattern_file(DEFAULT_PATTERN_FILE, url_trace=False)
