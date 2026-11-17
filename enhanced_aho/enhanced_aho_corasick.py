@@ -1015,6 +1015,12 @@ class EnhancedAhoCorasick:
                 return True
         return False
 
+    def _is_shortener_url(self, url):
+        """True when the URL's host is a known URL shortener."""
+        segments = self._segment_url(url)
+        host = '.'.join(segments['subdomains'] + [segments['sld'], segments['tld']]).lower()
+        return any(host == s or host.endswith("." + s) for s in self.URL_SHORTENERS)
+
     def _classify_url(self, url, lookup_budget):
         """
         Classifies ONE URL.
@@ -1045,6 +1051,17 @@ class EnhancedAhoCorasick:
 
             if expanded_url != url:
                 expanded_url = self._unwrap_tracking_redirect(expanded_url)
+
+            if expanded_url != url and self._is_shortener_url(expanded_url):
+                # The "destination" is still a shortened link (the chain was not
+                # followed to a real site), so it does not count as resolved.
+                self._trace(
+                    f"[URL analysis] Destination is still a shortened link "
+                    f"({expanded_url}); not resolved."
+                )
+                expanded_url = url
+
+            if expanded_url != url:
                 expanded_segments = self._segment_url(expanded_url)
                 expanded_root = self._registered_root_domain(expanded_segments)
                 is_dest_trusted = expanded_root in self.LEGITIMATE_DOMAINS

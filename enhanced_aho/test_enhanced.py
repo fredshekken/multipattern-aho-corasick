@@ -776,6 +776,15 @@ def test_o4_unresolved_shortener_keeps_fixed_risk():
     print("  [OK] A link that cannot be resolved keeps the fixed 2.5 risk.")
 
 
+def test_o4_destination_that_is_still_a_shortener_is_unresolved():
+    scanner = build_quiet_scanner()
+    with patch.object(scanner, "_unshorten_url", return_value="https://bit.ly/xk92p"):
+        info = scanner._analyze_url("https://bit.ly/xK92p")
+    assert info["segment"] == "shortener" and info["shortener_untrusted"]
+    assert info["multiplier"] == scanner.SEGMENT_RISK["shortener"]
+    print("  [OK] A 'destination' that is still a shortened link counts as unresolved.")
+
+
 # ============================================================
 #  MAIN — Run All Tests
 # ============================================================
@@ -830,6 +839,7 @@ if __name__ == "__main__":
     test_o4_resolved_safe_destination_is_a_normal_link()
     test_o4_resolved_risky_destination_is_its_own_detection()
     test_o4_unresolved_shortener_keeps_fixed_risk()
+    test_o4_destination_that_is_still_a_shortener_is_unresolved()
     test_o4_lookalike_check_is_on_by_default()
     test_o4_lookalike_check_can_be_switched_off()
     test_o4_lookalike_flag_escalates_brand_in_unverified_domain()
