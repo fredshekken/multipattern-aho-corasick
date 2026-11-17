@@ -38,8 +38,13 @@ class ConversationState:
         self.history.append((time.time(), action_tier, detections))
         self.acknowledged_block = False  # any new message clears a prior acknowledgment
 
+    def acknowledge(self):
+        """Called when the user taps "I understand" on a Level 3 card."""
+        self.acknowledged_block = True
+
     def session_tier(self, message_tier):
-        """Return the highest action_tier seen in the rolling window, or the current message_tier if it's higher than any prior history."""
+        """Return the tier for the current message. Multi-message escalation is
+        not used: each message is judged on its own score."""
         return message_tier
 
 

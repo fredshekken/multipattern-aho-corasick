@@ -76,8 +76,8 @@ def main():
     ap.add_argument("--pattern-file", required=True)
     ap.add_argument("--max-text-chars", type=int, default=None)
     ap.add_argument("--tier2-min-evidence", type=int, default=2)
-    ap.add_argument("--banner-min-evidence", type=int, default=1,
-                    help="Red banner needs at least this many evidence groups (default 1 = no extra rule)")
+    ap.add_argument("--banner-min-evidence", type=int, default=2,
+                    help="Red banner needs at least this many evidence groups (default 2, same as the extension)")
     ap.add_argument("--tier2-allow-single", default="",
                     help="Comma-separated evidence groups that may show a note ALONE, e.g. urgency_threat")
     ap.add_argument("--examples", type=int, default=0,
