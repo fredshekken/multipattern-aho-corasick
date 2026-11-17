@@ -1071,26 +1071,49 @@ class EnhancedAhoCorasick:
                         "shortener_untrusted": False,
                     }
 
-                self._trace(
-                    f"[URL analysis] Alert: Unmasked destination "
-                    f"({expanded_root or '(unknown)'}) is NOT in the trusted "
-                    f"whitelist. Retaining shortener risk "
-                    f"({self.SEGMENT_RISK['shortener']}x)."
+                # Not whitelisted: the revealed destination goes through the same
+                # structural URL analysis as a link written in the message
+                # (lookalike, subdomain, path, query). Being off the whitelist
+                # alone does not make a destination risky.
+                structure = self._structural_url_risk(
+                    expanded_url, expanded_segments, expanded_root
                 )
-                return {
-                    "multiplier": self.SEGMENT_RISK['shortener'],
-                    "segment": "shortener",
-                    "is_whitelisted": False,
+                result = {
                     "url": url,
                     "expanded_url": expanded_url,
                     "unmasked_url": expanded_url,
                     "unmasked_root": expanded_root,
-                    "shortener_untrusted": True,
-                    "reason": (
-                        "Shortened link reveals untrusted destination: "
-                        f"{expanded_root or '(unknown)'}"
-                    ),
+                    "shortener_untrusted": False,
+                    "is_whitelisted": False,
                 }
+                if structure is not None and structure["segment"] in self.RISKY_URL_SEGMENTS:
+                    self._trace(
+                        f"[URL analysis] Destination ({expanded_root or '(unknown)'}) "
+                        f"is not whitelisted; classified as {structure['segment']} "
+                        f"({structure['multiplier']}x)."
+                    )
+                    result.update({
+                        "multiplier": structure["multiplier"],
+                        "segment": structure["segment"],
+                        "destination_risky": True,
+                        "reason": (
+                            "Shortened link reveals a risky destination: "
+                            f"{expanded_root or '(unknown)'} ({structure['segment']})"
+                        ),
+                    })
+                    return result
+
+                self._trace(
+                    f"[URL analysis] Destination ({expanded_root or '(unknown)'}) "
+                    f"is not whitelisted but shows no risk signal; treated as a "
+                    f"normal link ({self.SEGMENT_RISK['none']}x)."
+                )
+                result.update({
+                    "multiplier": self.SEGMENT_RISK['none'],
+                    "segment": "none",
+                    "destination_risky": False,
+                })
+                return result
 
             self._trace(
                 f"[URL analysis] Destination could not be resolved; "
@@ -1124,6 +1147,15 @@ class EnhancedAhoCorasick:
         if is_whitelisted:
             return {"multiplier": self.SEGMENT_RISK['whitelisted'], "segment": "sld", "is_whitelisted": True}
 
+        return self._structural_url_risk(url, segments, root_domain)
+
+    def _structural_url_risk(self, url, segments, root_domain):
+        """
+        Structural analysis of a URL whose registered domain is NOT whitelisted.
+        Used for links written in the message and for destinations revealed by
+        a shortened link. Returns a result dict, or None when no risk signal is
+        found.
+        """
         # Optional: a brand name inside a domain that is not the brand's verified
         # domain is a lookalike (brand spoofing).
         if self.flag_lookalike_domains and self._brand_in_domain_name(root_domain):
@@ -1146,7 +1178,7 @@ class EnhancedAhoCorasick:
 
             # SLD: Brand owns the domain
             if norm_p in self._normalize(segments['sld']):
-                return {"multiplier": self.SEGMENT_RISK['sld'], "segment": "sld", "is_whitelisted": is_whitelisted}
+                return {"multiplier": self.SEGMENT_RISK['sld'], "segment": "sld", "is_whitelisted": False}
 
         return None
 
@@ -1404,6 +1436,35 @@ class EnhancedAhoCorasick:
                         "is_whitelisted": False,
                         "penalty": 0.0,
                         "final_risk": self.SEGMENT_RISK["shortener"],
+                    },
+                })
+
+        # A shortened link that resolves to a risky (non-whitelisted) destination
+        # is also a detection in its own right: R = destination multiplier.
+        if url_info.get("destination_risky"):
+            already = any(
+                item.get("match_type") == "url_shortener"
+                for item in results
+            )
+            if not already:
+                results.append({
+                    "alert": "CRITICAL: Shortened link leads to a risky destination!",
+                    "risk_score": url_info["multiplier"],
+                    "match_type": "url_shortener",
+                    "error_count": 0,
+                    "context": text[:120].lower().strip(),
+                    "signals": ["risky shortened-link destination"],
+                    "score_breakdown": {
+                        "match_layer": "URL shortener destination analysis",
+                        "token_score": 0.0,
+                        "pattern": "SHORTENED_LINK_DESTINATION",
+                        "matched_text": url_info.get("expanded_url", ""),
+                        "proximity_delta": 0.0,
+                        "url_multiplier": url_info["multiplier"],
+                        "url_segment": url_info["segment"],
+                        "is_whitelisted": False,
+                        "penalty": 0.0,
+                        "final_risk": url_info["multiplier"],
                     },
                 })
 

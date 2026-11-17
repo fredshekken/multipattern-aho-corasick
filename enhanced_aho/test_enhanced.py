@@ -215,17 +215,25 @@ def test_o4_unresolved_shorteners_remain_unverified():
         "https://bit.ly/12Tst": "http://vmsvedaweb.com/gayatri/",
     }
 
+    expected_tier = {
+        "https://bit.ly/4yGX271": 3,   # lookalike destination: R = 2.0
+        "https://bit.ly/12Tst": 0,     # unknown site with no risk signal: normal link
+    }
+
     for url, destination in preview_destinations.items():
         with patch.object(scanner, "_unshorten_url", return_value=destination):
             assessment = scanner.assess_message(url)
 
-        assert assessment["action_tier"] == 3
-        assert "url_risk" in assessment["evidence_groups"]
-        assert any(
-            detection["match_type"] == "url_shortener"
-            and detection["score_breakdown"]["matched_text"] == destination
-            for detection in assessment["detections"]
-        )
+        assert assessment["action_tier"] == expected_tier[url]
+        if expected_tier[url] == 3:
+            assert "url_risk" in assessment["evidence_groups"]
+            assert any(
+                detection["match_type"] == "url_shortener"
+                and detection["score_breakdown"]["matched_text"] == destination
+                for detection in assessment["detections"]
+            )
+        else:
+            assert not assessment["detections"]
 
 
 def test_o4_shortener_request_uses_verified_certifi_tls():
@@ -354,8 +362,10 @@ def test_o4_viglink_redirect_to_untrusted_domain_stays_risky():
 
     assert result["expanded_url"] == "https://phishing.example/login"
     assert not result["is_whitelisted"]
-    assert result["segment"] == "shortener"
-    assert result["multiplier"] == scanner.SEGMENT_RISK["shortener"]
+    # The revealed destination is analyzed like any other URL: "login" in the path
+    assert result["segment"] == "path"
+    assert result["multiplier"] == scanner.SEGMENT_RISK["path"]
+    assert result["destination_risky"]
 
 
 def test_o4_shortener_retries_transient_dns_failure():
@@ -427,6 +437,11 @@ def test_o4_preview_reveals_unverified_destination_as_risky():
         "https://bit.ly/12Tst": "http://vmsvedaweb.com/gayatri/",
     }
     terminal_output = StringIO()
+    # Destination classified like any other URL (not "any non-whitelisted = 2.5x")
+    expected_segment = {
+        "https://bit.ly/4yGX271": "path",   # "login" in the path (this test scanner has no brand list)
+        "https://bit.ly/12Tst": "none",     # unknown site with no risk signal
+    }
 
     with redirect_stdout(terminal_output):
         for short_url, destination in preview_destinations.items():
@@ -443,8 +458,8 @@ def test_o4_preview_reveals_unverified_destination_as_risky():
 
             assert result["expanded_url"] == destination
             assert not result["is_whitelisted"]
-            assert result["segment"] == "shortener"
-            assert result["multiplier"] == scanner.SEGMENT_RISK["shortener"]
+            assert result["segment"] == expected_segment[short_url]
+            assert result["multiplier"] == scanner.SEGMENT_RISK[expected_segment[short_url]]
 
     captured_output = terminal_output.getvalue()
     assert "Successfully unmasked: https://bit.ly/4yGX271" in captured_output
@@ -461,8 +476,8 @@ def test_o4_shortener_keeps_risk_for_unverified_destination():
         result = scanner._analyze_url("https://bit.ly/unverified")
 
     assert not result["is_whitelisted"]
-    assert result["segment"] == "shortener"
-    assert result["multiplier"] == scanner.SEGMENT_RISK["shortener"]
+    assert result["segment"] == "path"
+    assert result["multiplier"] == scanner.SEGMENT_RISK["path"]
     assert result["expanded_url"] == expanded_url
 
 
@@ -724,6 +739,44 @@ def test_o3_affix_root_must_be_an_exact_trie_path():
 
 
 # ============================================================
+#  O4 -- Resolved destinations are analyzed, not auto-flagged
+# ============================================================
+
+def test_o4_resolved_safe_destination_is_a_normal_link():
+    scanner = build_quiet_scanner()
+    with patch.object(scanner, "_unshorten_url", return_value="https://www.youtube.com/watch?v=1"):
+        info = scanner._analyze_url("https://bit.ly/video")
+        result = scanner.assess_message("check this out https://bit.ly/video")
+    assert info["segment"] == "none" and info["multiplier"] == scanner.SEGMENT_RISK["none"]
+    assert not info["destination_risky"]
+    assert result["action_tier"] == 0 and not result["detections"]
+    print("  [OK] A resolved destination with no risk signal is treated as a normal link.")
+
+
+def test_o4_resolved_risky_destination_is_its_own_detection():
+    scanner = build_default_scanner()  # full dictionary, includes the brand list
+    with patch.object(scanner, "_unshorten_url", return_value="https://bpi-security-update.com/x"):
+        result = scanner.assess_message("https://bit.ly/abc")
+    links = [d for d in result["detections"] if d["match_type"] == "url_shortener"]
+    assert len(links) == 1
+    assert links[0]["score_breakdown"]["pattern"] == "SHORTENED_LINK_DESTINATION"
+    # R = destination multiplier (lookalike = 2.0)
+    assert links[0]["risk_score"] == scanner.SEGMENT_RISK["lookalike"]
+    assert "url_risk" in result["evidence_groups"]
+    print("  [OK] A risky revealed destination adds one detection with R = its multiplier.")
+
+
+def test_o4_unresolved_shortener_keeps_fixed_risk():
+    scanner = build_quiet_scanner()
+    with patch.object(scanner, "_unshorten_url", side_effect=_same_url):
+        result = scanner.assess_message("https://bit.ly/unknown")
+    links = [d for d in result["detections"] if d["match_type"] == "url_shortener"]
+    assert links[0]["score_breakdown"]["pattern"] == "UNVERIFIED_SHORTENER"
+    assert links[0]["risk_score"] == scanner.SEGMENT_RISK["shortener"]
+    print("  [OK] A link that cannot be resolved keeps the fixed 2.5 risk.")
+
+
+# ============================================================
 #  MAIN — Run All Tests
 # ============================================================
 
@@ -774,6 +827,9 @@ if __name__ == "__main__":
     test_o4_shortener_resolution_can_be_switched_off()
     test_o4_url_trace_can_be_silenced()
     test_o4_message_contacts_shortener_only_once()
+    test_o4_resolved_safe_destination_is_a_normal_link()
+    test_o4_resolved_risky_destination_is_its_own_detection()
+    test_o4_unresolved_shortener_keeps_fixed_risk()
     test_o4_lookalike_check_is_on_by_default()
     test_o4_lookalike_check_can_be_switched_off()
     test_o4_lookalike_flag_escalates_brand_in_unverified_domain()
