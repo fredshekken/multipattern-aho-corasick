@@ -459,6 +459,25 @@ class EnhancedAhoCorasick:
                 self.out[s] |= self.out[self.fail[s]]
                 queue.append(s)
 
+        # Step 3: DFA Transition Flattening
+        # Pre-computes the next state for every (state, character) pair over the
+        # pattern alphabet by inheriting missing transitions from the failure
+        # state. Scanning then needs one lookup per character and never walks
+        # failure links at search time. Characters outside the alphabet lead
+        # back to the root.
+        alphabet = {char for edges in self.goto for char in edges}
+        self.delta = [dict() for _ in range(self.states_count)]
+        for char in alphabet:
+            self.delta[0][char] = self.goto[0].get(char, 0)
+        queue = deque(self.goto[0].values())
+        while queue:
+            r = queue.popleft()
+            f = self.fail[r]
+            for char in alphabet:
+                nxt = self.goto[r].get(char)
+                self.delta[r][char] = nxt if nxt is not None else self.delta[f][char]
+            queue.extend(self.goto[r].values())
+
     # -------------------------------------------------------------------------
     # Objective 1: Bitap (Shift-Or) Fuzzy Matching & Boundary Guard
     # SOP Solved: SOP 1 (Detecting fuzzy obfuscations bypassing exact DFA)
@@ -621,18 +640,26 @@ class EnhancedAhoCorasick:
 
         return root
 
+    def _exact_path_state(self, norm_word):
+        """
+        Follows the trie along the exact characters of a normalized word.
+        Returns the state reached, or 0 if the word is not a path in the trie.
+        """
+        curr = 0
+        for char in norm_word:
+            nxt = self.goto[curr].get(char)
+            if nxt is None:
+                return 0
+            curr = nxt
+        return curr
+
     def _trie_recognizes(self, word):
         """
         WHERE IT ENTERS:
         Helper for _strip_affixes.
         Follows transitions in the trie to check if a word is an active keyword.
         """
-        curr = 0
-        for char in self._normalize(word):
-            curr = self.goto[curr].get(char, 0)
-            if curr == 0 and char not in self.goto[0]:
-                return False
-        return self.out[curr] > 0
+        return self.out[self._exact_path_state(self._normalize(word))] > 0
 
     def _affix_search(self, text):
         """
@@ -654,17 +681,12 @@ class EnhancedAhoCorasick:
 
             norm_root = self._normalize(stripped)
 
-            # Traverse trie using the stripped root
-            curr = 0
-            for char in norm_root:
-                curr = self.goto[curr].get(char, 0)
-                if curr == 0 and char not in self.goto[0]:
-                    break
-            else:
-                if self.out[curr] > 0:
-                    for j in range(len(self.patterns)):
-                        if self.out[curr] & (1 << j):
-                            matches.append((j, token, stripped, word_pos))
+            # Traverse trie using the stripped root (exact path only)
+            curr = self._exact_path_state(norm_root)
+            if self.out[curr] > 0:
+                for j in range(len(self.patterns)):
+                    if self.out[curr] & (1 << j):
+                        matches.append((j, token, stripped, word_pos))
 
         return matches
 
@@ -1176,7 +1198,8 @@ class EnhancedAhoCorasick:
         # ---------------------------------------------------------------------
         curr = 0
         for i, char in enumerate(clean_text):
-            curr = self.goto[curr].get(char, 0)
+            # O(1) flattened transition (includes failure-link fallbacks)
+            curr = self.delta[curr].get(char, 0)
             if self.out[curr] > 0:
                 for j in range(len(self.patterns)):
                     if self.out[curr] & (1 << j):

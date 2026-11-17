@@ -23,6 +23,12 @@ const TIER2_MIN_EVIDENCE = 2;
 // Set to "banner" to always show the red banner for Tier 3.
 const URL_ONLY_TIER3_MODE = "collapsed";
 
+// A red banner (active warning) needs at least this many different kinds of
+// evidence. A Tier 3 message with fewer follows the Tier 2 rule instead: a note
+// if it has TIER2_MIN_EVIDENCE kinds, otherwise nothing (still logged).
+// Set to 1 to show the red banner for every Tier 3 message.
+const BANNER_MIN_EVIDENCE = 2;
+
 const BACKEND_URL = "http://127.0.0.1:8000/scan";
 const FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
 const UI_CLASS = "phish-shield-ui";
@@ -199,6 +205,19 @@ function urlOnlyEvidence(data) {
     data.evidence_groups[0] === "url_risk";
 }
 
+// Decides what the user sees. Keep identical to display_mode() in
+// viber_bot/operational_rates.py, which measures these rules on the datasets.
+function displayMode(data) {
+  const count = evidenceCount(data);
+  if (data.tier <= 1) return "none";
+  if (data.tier === 2) return count >= TIER2_MIN_EVIDENCE ? TIER_DISPLAY[2] : "none";
+
+  // Tier 3
+  if (urlOnlyEvidence(data)) return URL_ONLY_TIER3_MODE;
+  if (count >= BANNER_MIN_EVIDENCE) return TIER_DISPLAY[3];
+  return count >= TIER2_MIN_EVIDENCE ? TIER_DISPLAY[2] : "none";
+}
+
 function evidenceCount(data) {
   // If an older backend does not send evidence groups, do not hide anything.
   return Array.isArray(data.evidence_groups) ? data.evidence_groups.length : Infinity;
@@ -231,13 +250,7 @@ function renderResult(node, data) {
 
   if (data.tier < 1) return;
 
-  let mode = TIER_DISPLAY[data.tier] || "none";
-  if (data.tier === 2 && evidenceCount(data) < TIER2_MIN_EVIDENCE) {
-    mode = "none";
-  }
-  if (data.tier >= 3 && urlOnlyEvidence(data)) {
-    mode = URL_ONLY_TIER3_MODE;
-  }
+  const mode = displayMode(data);
 
   if (mode === "none") {
     const { tokenList, riskValue } = detailText(data);

@@ -668,6 +668,62 @@ def test_o4_whitelist_covers_all_named_brands():
 
 
 # ============================================================
+#  O1 -- Failure links and DFA transition flattening
+# ============================================================
+
+def test_o1_scan_follows_failure_links():
+    scanner = EnhancedAhoCorasick(["account suspended", "click here", "account", "click"],
+                                  max_errors=1, url_trace=False)
+    for text, phrase in [("account account suspended", "account suspended"),
+                         ("click click here", "click here")]:
+        found = {d["score_breakdown"]["pattern"] for d in scanner.enhanced_search(text)
+                 if d["match_type"] == "exact"}
+        assert phrase in found, (text, found)
+    print("  [OK] A mismatch follows the failure link instead of restarting the scan.")
+
+
+def test_o1_flattened_dfa_matches_brute_force():
+    import random
+    scanner = build_default_scanner()
+    norm = [scanner._normalize(p) for p in scanner.patterns]
+
+    def dfa(text):
+        found, state = set(), 0
+        for i, char in enumerate(text):
+            state = scanner.delta[state].get(char, 0)
+            if scanner.out[state]:
+                for j in range(len(norm)):
+                    if scanner.out[state] & (1 << j):
+                        found.add((j, i))
+        return found
+
+    def brute(text):
+        found = set()
+        for j, p in enumerate(norm):
+            start = text.find(p)
+            while start != -1:
+                found.add((j, start + len(p) - 1))
+                start = text.find(p, start + 1)
+        return found
+
+    rng = random.Random(7)
+    pieces = norm + [" ", "a", "x", "-", "ng", "sa"]
+    for _ in range(500):
+        text = scanner._normalize("".join(
+            rng.choice(pieces) + rng.choice(["", " ", "a"]) for _ in range(rng.randint(1, 9))))
+        assert dfa(text) == brute(text), text
+    print("  [OK] The flattened DFA finds exactly the same matches as a brute-force search.")
+
+
+def test_o3_affix_root_must_be_an_exact_trie_path():
+    scanner = build_default_scanner()
+    assert scanner._trie_recognizes("verify")
+    assert not scanner._trie_recognizes("xverify")
+    assert not scanner._trie_recognizes("ggcash")
+    print("  [OK] A stripped root counts only if the whole root is a keyword path.")
+
+
+# ============================================================
 #  MAIN — Run All Tests
 # ============================================================
 
@@ -681,6 +737,9 @@ if __name__ == "__main__":
     test_o1_normalization_and_trie(scanner)
     test_o1_fuzzy_bitap_layer(scanner)
     test_o1_fuzzy_word_boundary_guard()
+    test_o1_scan_follows_failure_links()
+    test_o1_flattened_dfa_matches_brute_force()
+    test_o3_affix_root_must_be_an_exact_trie_path()
 
     test_o2_boosters_increase_score(scanner)
     test_o2_neutralizers_suppress_score(scanner)
