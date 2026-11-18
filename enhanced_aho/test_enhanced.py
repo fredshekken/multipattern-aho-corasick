@@ -430,6 +430,27 @@ def test_o4_shortener_does_not_retry_http_403():
     mocked_sleep.assert_not_called()
 
 
+def test_o4_preview_page_text_is_not_a_destination():
+    """A disabled-link page: link labels like "Acceptable Use Policy" are not web addresses."""
+    scanner = build_scanner()
+    response = MagicMock()
+    response.__enter__.return_value = response
+    response.geturl.return_value = "https://bit.ly/Gcash-X"
+    response.read.return_value = (
+        '<p>This link has been disabled.</p>'
+        '<a href="/pages/acceptable-use">Acceptable Use Policy</a>'
+        '<a href="https://bitly.com/pages/terms">Terms</a>'
+        '<a href="mailto:abuse@example.com">Report</a>'
+    ).encode("utf-8")
+
+    with patch("enhanced_aho_corasick.build_opener") as mocked_build_opener:
+        mocked_build_opener.return_value.open.return_value = response
+        result = scanner._analyze_url("https://bit.ly/Gcash-X")
+
+    assert result["segment"] == "shortener"
+    assert result["multiplier"] == scanner.SEGMENT_RISK["shortener"]
+
+
 def test_o4_preview_reveals_unverified_destination_as_risky():
     scanner = build_scanner()
     preview_destinations = {
@@ -825,6 +846,7 @@ if __name__ == "__main__":
     test_o4_shortener_retries_transient_dns_failure()
     test_o4_shortener_returns_unresolved_after_retry_limit()
     test_o4_shortener_does_not_retry_http_403()
+    test_o4_preview_page_text_is_not_a_destination()
     test_o4_preview_reveals_unverified_destination_as_risky()
     test_o4_worst_url_decides_when_whitelisted_link_comes_first()
     test_o4_all_whitelisted_links_stay_clean()

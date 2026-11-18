@@ -46,6 +46,27 @@ class _DestinationLinkParser(HTMLParser):
             self._anchor_text = []
 
 
+# A real web host name: letters, digits and hyphens in dot-separated labels,
+# ending in a letters-only top-level domain (example.com, www.bpi.com.ph).
+_VALID_HOST_RE = re.compile(
+    r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$"
+)
+
+
+def _is_valid_destination(candidate):
+    """
+    True only when a link found on a preview page is a real web address.
+    Rejects plain page text such as "Acceptable Use Policy" (spaces, no
+    domain), mailto: links, and anything that is not http(s).
+    """
+    if not candidate or any(ch.isspace() for ch in candidate):
+        return False
+    parsed = urlsplit(candidate)
+    if parsed.scheme not in ("http", "https"):
+        return False
+    return bool(_VALID_HOST_RE.match((parsed.hostname or "").lower()))
+
+
 class _LocationCaptureRedirectHandler(HTTPRedirectHandler):
     """Capture a redirect target without requesting that target."""
 
@@ -1714,6 +1735,8 @@ class EnhancedAhoCorasick:
                                 elif not urlsplit(candidate).scheme:
                                     candidate = "https://" + candidate
 
+                                if not _is_valid_destination(candidate):
+                                    continue
                                 parsed = urlsplit(candidate)
                                 candidate_host = (parsed.hostname or "").lower()
                                 if not candidate_host or candidate_host == shortener_host:
